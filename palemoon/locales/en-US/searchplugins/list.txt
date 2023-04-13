@@ -1,0 +1,3 @@
+google
+google_ua
+wikipedia-ru
