@@ -238,6 +238,7 @@ XDRRelazificationInfo(XDRState<mode>* xdr, HandleFunction fun, HandleScript scri
         uint32_t toStringEnd = script->toStringEnd();
         uint32_t lineno = script->lineno();
         uint32_t column = script->column();
+        uint32_t numFieldInitializers;
 
         if (mode == XDR_ENCODE) {
             packedFields = lazy->packedFields();
@@ -251,9 +252,16 @@ XDRRelazificationInfo(XDRState<mode>* xdr, HandleFunction fun, HandleScript scri
             // relazify scripts with inner functions.  See
             // JSFunction::createScriptForLazilyInterpretedFunction.
             MOZ_ASSERT(lazy->numInnerFunctions() == 0);
+            if (fun->kind() == JSFunction::FunctionKind::ClassConstructor) {
+                numFieldInitializers = (uint32_t)lazy->getFieldInitializers().numFieldInitializers;
+            } else {
+                numFieldInitializers = UINT32_MAX;
+            }
         }
 
         if (!xdr->codeUint64(&packedFields))
+            return false;
+        if (!xdr->codeUint32(&numFieldInitializers))
             return false;
 
         if (mode == XDR_DECODE) {
@@ -264,6 +272,9 @@ XDRRelazificationInfo(XDRState<mode>* xdr, HandleFunction fun, HandleScript scri
                 return false;
 
             lazy->setToStringEnd(toStringEnd);
+            if (numFieldInitializers != UINT32_MAX) {
+                lazy->setFieldInitializers(FieldInitializers((size_t)numFieldInitializers));
+            }
 
             // As opposed to XDRLazyScript, we need to restore the runtime bits
             // of the script, as we are trying to match the fact this function
@@ -337,6 +348,7 @@ js::XDRScript(XDRState<mode>* xdr, HandleScope scriptEnclosingScope, HandleScrip
         NeedsHomeObject,
         IsDerivedClassConstructor,
         IsDefaultClassConstructor,
+        IsFieldInitializer,
     };
 
     uint32_t length, lineno, column, nfixed, nslots;
@@ -461,6 +473,8 @@ js::XDRScript(XDRState<mode>* xdr, HandleScope scriptEnclosingScope, HandleScrip
             scriptBits |= (1 << IsDerivedClassConstructor);
         if (script->isDefaultClassConstructor())
             scriptBits |= (1 << IsDefaultClassConstructor);
+        if (script->isFieldInitializer())
+            scriptBits |= (1 << IsFieldInitializer);
     }
 
     if (!xdr->codeUint32(&prologueLength))
@@ -587,6 +601,8 @@ js::XDRScript(XDRState<mode>* xdr, HandleScope scriptEnclosingScope, HandleScrip
             script->isDerivedClassConstructor_ = true;
         if (scriptBits & (1 << IsDefaultClassConstructor))
             script->isDefaultClassConstructor_ = true;
+        if (scriptBits & (1 << IsFieldInitializer))
+            script->isFieldInitializer_ = true;
 
         if (scriptBits & (1 << IsLegacyGenerator)) {
             MOZ_ASSERT(!(scriptBits & (1 << IsStarGenerator)));
@@ -952,6 +968,7 @@ js::XDRLazyScript(XDRState<mode>* xdr, HandleScope enclosingScope, HandleScript 
         uint32_t lineno;
         uint32_t column;
         uint64_t packedFields;
+        uint32_t numFieldInitializers;
 
         if (mode == XDR_ENCODE) {
             // Note: it's possible the LazyScript has a non-null script_ pointer
@@ -967,13 +984,19 @@ js::XDRLazyScript(XDRState<mode>* xdr, HandleScope enclosingScope, HandleScript 
             lineno = lazy->lineno();
             column = lazy->column();
             packedFields = lazy->packedFields();
+            if (fun->kind() == JSFunction::FunctionKind::ClassConstructor) {
+                numFieldInitializers = (uint32_t)lazy->getFieldInitializers().numFieldInitializers;
+            } else {
+                numFieldInitializers = UINT32_MAX;
+            }
         }
 
         if (!xdr->codeUint32(&begin) || !xdr->codeUint32(&end) ||
             !xdr->codeUint32(&toStringStart) ||
             !xdr->codeUint32(&toStringEnd) ||
             !xdr->codeUint32(&lineno) || !xdr->codeUint32(&column) ||
-            !xdr->codeUint64(&packedFields))
+            !xdr->codeUint64(&packedFields) ||
+            !xdr->codeUint32(&numFieldInitializers))
         {
             return false;
         }
@@ -984,6 +1007,9 @@ js::XDRLazyScript(XDRState<mode>* xdr, HandleScope enclosingScope, HandleScript 
             if (!lazy)
                 return false;
             lazy->setToStringEnd(toStringEnd);
+            if (numFieldInitializers != UINT32_MAX) {
+                lazy->setFieldInitializers(FieldInitializers((size_t)numFieldInitializers));
+            }
             fun->initLazyScript(lazy);
         }
     }
@@ -2673,6 +2699,7 @@ JSScript::initFromFunctionBox(ExclusiveContext* cx, HandleScript script,
     script->funHasExtensibleScope_ = funbox->hasExtensibleScope();
     script->needsHomeObject_       = funbox->needsHomeObject();
     script->isDerivedClassConstructor_ = funbox->isDerivedClassConstructor();
+    script->isFieldInitializer_    = funbox->isFieldInitializer();
 
     if (funbox->argumentsHasLocalBinding()) {
         script->setArgumentsHasVarBinding();
@@ -3351,6 +3378,7 @@ js::detail::CopyScript(JSContext* cx, HandleScript src, HandleScript dst,
     dst->isGeneratorExp_ = src->isGeneratorExp();
     dst->setGeneratorKind(src->generatorKind());
     dst->isDerivedClassConstructor_ = src->isDerivedClassConstructor();
+    dst->isFieldInitializer_ = src->isFieldInitializer();
     dst->needsHomeObject_ = src->needsHomeObject();
     dst->isDefaultClassConstructor_ = src->isDefaultClassConstructor();
     dst->isAsync_ = src->asyncKind() == AsyncFunction;
@@ -3997,6 +4025,7 @@ LazyScript::LazyScript(JSFunction* fun, void* table, uint64_t packedFields,
     sourceObject_(nullptr),
     table_(table),
     packedFields_(packedFields),
+    fieldInitializers_(FieldInitializers::Invalid()),
     begin_(begin),
     end_(end),
     toStringStart_(toStringStart),

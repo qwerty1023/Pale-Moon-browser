@@ -71,6 +71,7 @@
     macro(LP,           "'('") \
     macro(RP,           "')'") \
     macro(NAME,         "identifier") \
+    macro(PRIVATE_NAME, "private identifier") \
     macro(NUMBER,       "numeric literal") \
     macro(STRING,       "string literal") \
     \
@@ -217,6 +218,9 @@
     range(ASSIGNMENT_START, ASSIGN) \
     macro(ADDASSIGN,    "'+='") \
     macro(SUBASSIGN,    "'-='") \
+    macro(COALESCEASSIGN, "'\?\?='") /* avoid trigraphs warning */ \
+    macro(ORASSIGN,     "'||='") \
+    macro(ANDASSIGN,    "'&&='") \
     macro(BITORASSIGN,  "'|='") \
     macro(BITXORASSIGN, "'^='") \
     macro(BITANDASSIGN, "'&='") \
@@ -321,6 +325,7 @@ inline MOZ_MUST_USE bool
 TokenKindIsPossibleIdentifier(TokenKind tt)
 {
     return tt == TOK_NAME ||
+           tt == TOK_PRIVATE_NAME ||
            TokenKindIsContextualKeyword(tt) ||
            TokenKindIsStrictReservedWord(tt);
 }

@@ -4436,7 +4436,7 @@ IonBuilder::jsop_logical(JSOp op)
         MIsNullOrUndefined* isNullOrUndefined =
             MIsNullOrUndefined::New(alloc(), lhs);
         current->add(isNullOrUndefined);
-        test = newTest(isNullOrUndefined, evalLhs, evalRhs);
+        test = newTest(isNullOrUndefined, evalRhs, evalLhs);
         break;
       }
 
