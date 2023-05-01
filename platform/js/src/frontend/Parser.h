@@ -21,6 +21,7 @@
 #include "frontend/NameCollections.h"
 #include "frontend/SharedContext.h"
 #include "frontend/SyntaxParseHandler.h"
+#include "frontend/TokenStream.h"
 
 namespace js {
 
@@ -525,10 +526,6 @@ class ParseContext : public Nestable<ParseContext>
         return sc_->isFunctionBox() && sc_->asFunctionBox()->function()->isMethod();
     }
 
-    bool allowReturn() const {
-        return sc_->isFunctionBox() && sc_->asFunctionBox()->allowReturn();
-    }
-
     uint32_t scriptId() const {
         return scriptId_;
     }
@@ -586,16 +583,15 @@ enum class PropertyType {
     AsyncMethod,
     AsyncGeneratorMethod,
     Constructor,
-    DerivedConstructor,
-    Field,
+    DerivedConstructor
 };
 
 // Specify a value for an ES6 grammar parametrization.  We have no enum for
-// [Return] because its behavior is almost exactly equivalent to checking whether
+// [Return] because its behavior is exactly equivalent to checking whether
 // we're in a function box -- easier and simpler than passing an extra
 // parameter everywhere.
 enum YieldHandling { YieldIsName, YieldIsKeyword };
-enum AwaitHandling : uint8_t { AwaitIsName, AwaitIsKeyword, AwaitIsModuleKeyword, AwaitIsDisallowed };
+enum AwaitHandling : uint8_t { AwaitIsName, AwaitIsKeyword, AwaitIsModuleKeyword };
 enum InHandling { InAllowed, InProhibited };
 enum DefaultHandling { NameRequired, AllowDefaultName };
 enum TripledotHandling { TripledotAllowed, TripledotProhibited };
@@ -724,15 +720,6 @@ class UsedNameTracker
     MOZ_MUST_USE bool noteUse(ExclusiveContext* cx, JSAtom* name,
                               uint32_t scriptId, uint32_t scopeId);
 
-    MOZ_MUST_USE bool markAsAlwaysClosedOver(ExclusiveContext* cx, JSAtom* name,
-                                             uint32_t scriptId, uint32_t scopeId) {
-        // This marks a variable as always closed over:
-        // UsedNameInfo::noteBoundInScope only checks if scriptId and scopeId are
-        // greater than the current scriptId/scopeId, so do a simple increment to
-        // make that so.
-        return noteUse(cx, name, scriptId + 1, scopeId + 1);
-    }
-
     struct RewindToken
     {
       private:
@@ -816,18 +803,21 @@ class ParserBase : public StrictModeGetter
 
     /* AwaitHandling */ uint8_t awaitHandling_:2;
 
+    uint8_t parseGoal_:1;
+
   public:
     bool awaitIsKeyword() const {
-        return awaitHandling_ == AwaitIsKeyword || awaitHandling_ == AwaitIsModuleKeyword;
+        return awaitHandling_ != AwaitIsName;
     }
-    bool awaitIsDisallowed() const {
-        return awaitHandling_ == AwaitIsDisallowed;
+
+    ParseGoal parseGoal() const {
+        return ParseGoal(parseGoal_);
     }
 
     ParserBase(ExclusiveContext* cx, LifoAlloc& alloc, const ReadOnlyCompileOptions& options,
                const char16_t* chars, size_t length, bool foldConstants,
                UsedNameTracker& usedNames, Parser<SyntaxParseHandler>* syntaxParser,
-               LazyScript* lazyOuterFunction);
+               LazyScript* lazyOuterFunction, ParseGoal parseGoal);
     ~ParserBase();
 
     const char* getFilename() const { return tokenStream.getFilename(); }
@@ -918,6 +908,8 @@ class ParserBase : public StrictModeGetter
 template <typename ParseHandler>
 class Parser final : public ParserBase, private JS::AutoGCRooter
 {
+  protected:
+    using Modifier = TokenStream::Modifier;
   private:
     using Node = typename ParseHandler::Node;
 
@@ -1063,7 +1055,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
   public:
     Parser(ExclusiveContext* cx, LifoAlloc& alloc, const ReadOnlyCompileOptions& options,
            const char16_t* chars, size_t length, bool foldConstants, UsedNameTracker& usedNames,
-           Parser<SyntaxParseHandler>* syntaxParser, LazyScript* lazyOuterFunction);
+           Parser<SyntaxParseHandler>* syntaxParser, LazyScript* lazyOuterFunction, ParseGoal parseGoal);
     ~Parser();
 
     friend class AutoAwaitIsKeyword<ParseHandler>;
@@ -1098,6 +1090,71 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
      */
     ListNodeType parse();
 
+  private:
+    /*
+     * Gets the next token and checks if it matches to the given `condition`.
+     * If it matches, returns true.
+     * If it doesn't match, calls `errorReport` to report the error, and
+     * returns false.
+     * If other error happens, it returns false but `errorReport` may not be
+     * called and other error will be thrown in that case.
+     *
+     * In any case, the already gotten token is not ungotten.
+     *
+     * The signature of `condition` is [...](TokenKind actual) -> bool, and
+     * the signature of `errorReport` is [...](TokenKind actual).
+     */
+    template<typename ConditionT, typename ErrorReportT>
+    MOZ_MUST_USE bool mustMatchTokenInternal(ConditionT condition, Modifier modifier,
+                                             ErrorReportT errorReport);
+
+  public:
+    /*
+     * The following mustMatchToken variants follow the behavior and parameter
+     * types of mustMatchTokenInternal above.
+     *
+     * If modifier is omitted, `None` is used.
+     * If TokenKind is passed instead of `condition`, it checks if the next
+     * token is the passed token.
+     * If error number is passed instead of `errorReport`, it reports an
+     * error with the passed errorNumber.
+     */
+    MOZ_MUST_USE bool mustMatchToken(TokenKind expected, Modifier modifier, JSErrNum errorNumber) {
+        return mustMatchTokenInternal([expected](TokenKind actual) {
+                                          return actual == expected;
+                                      },
+                                      modifier,
+                                      [this, errorNumber](TokenKind) {
+                                          this->error(errorNumber);
+                                      });
+    }
+
+    MOZ_MUST_USE bool mustMatchToken(TokenKind excpected, JSErrNum errorNumber) {
+        return mustMatchToken(excpected, TokenStream::None, errorNumber);
+    }
+
+    template<typename ConditionT>
+    MOZ_MUST_USE bool mustMatchToken(ConditionT condition, JSErrNum errorNumber) {
+        return mustMatchTokenInternal(condition, TokenStream::None,
+                                      [this, errorNumber](TokenKind) {
+                                          this->error(errorNumber);
+                                      });
+    }
+
+    template<typename ErrorReportT>
+    MOZ_MUST_USE bool mustMatchToken(TokenKind expected, Modifier modifier,
+                                     ErrorReportT errorReport) {
+        return mustMatchTokenInternal([expected](TokenKind actual) {
+                                          return actual == expected;
+                                      },
+                                      modifier, errorReport);
+    }
+
+    template<typename ErrorReportT>
+    MOZ_MUST_USE bool mustMatchToken(TokenKind expected, ErrorReportT errorReport) {
+        return mustMatchToken(expected, TokenStream::None, errorReport);
+    }
+
     /*
      * Allocate a new parsed object or function container from
      * cx->tempLifoAlloc.
@@ -1114,7 +1171,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
      */
     JSFunction* newFunction(HandleAtom atom, FunctionSyntaxKind kind,
                             GeneratorKind generatorKind, FunctionAsyncKind asyncKind,
-                            HandleObject proto = nullptr);
+                            HandleObject proto);
 
     void trace(JSTracer* trc);
 
@@ -1254,6 +1311,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
     ListNodeType lexicalDeclaration(YieldHandling yieldHandling, DeclarationKind kind);
 
     inline BinaryNodeType importDeclaration();
+    Node importDeclarationOrImportExpr(YieldHandling yieldHandling);
 
     bool processExport(Node node);
     bool processExportFrom(BinaryNodeType node);
@@ -1364,6 +1422,8 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
     bool tryNewTarget(BinaryNodeType* newTarget);
     bool checkAndMarkSuperScope();
 
+    Node importExpr(YieldHandling yieldHandling, bool allowCallSyntax);
+
     FunctionNodeType methodDefinition(uint32_t toStringStart, PropertyType propType, HandleAtom funName);
 
     /*
@@ -1380,8 +1440,6 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
 
     // Parse a function body.  Pass StatementListBody if the body is a list of
     // statements; pass ExpressionBody if the body is a single expression.
-    //
-    // Don't include opening LeftCurly token when invoking.
     enum FunctionBodyType { StatementListBody, ExpressionBody };
     LexicalScopeNodeType functionBody(InHandling inHandling, YieldHandling yieldHandling,
                                       FunctionSyntaxKind kind, FunctionBodyType type);
@@ -1420,53 +1478,18 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
     enum ClassContext { ClassStatement, ClassExpression };
     ClassNodeType classDefinition(YieldHandling yieldHandling, ClassContext classContext,
                                   DefaultHandling defaultHandling);
-    struct ClassFields {
-        // The number of instance class fields.
-        size_t instanceFields = 0;
 
-        // The number of instance class fields with computed property names.
-        size_t instanceFieldKeys = 0;
-
-        // The number of static class fields.
-        size_t staticFields = 0;
-
-        // The number of static blocks
-        size_t staticBlocks = 0;
-
-        // The number of static class fields with computed property names.
-        size_t staticFieldKeys = 0;
-    };
-    MOZ_MUST_USE bool classMember(YieldHandling yieldHandling,
-                                  const ParseContext::ClassStatement& classStmt,
-                                  HandlePropertyName className,
-                                  uint32_t classStartOffset, bool hasHeritage,
-                                  ClassFields& classFields,
-                                  ListNodeType& classMembers, bool* done);
-    MOZ_MUST_USE bool finishClassConstructor(
-        const ParseContext::ClassStatement& classStmt,
-        HandlePropertyName className, bool hasHeritage,
-        uint32_t classStartOffset, uint32_t classEndOffset,
-        const ClassFields& classFields, ListNodeType& classMembers);
-
-    FunctionNodeType fieldInitializerOpt(HandleAtom atom, ClassFields& classFields, bool isStatic);
-    FunctionNodeType staticClassBlock(ClassFields& classFields);
-    FunctionNodeType synthesizeConstructor(HandleAtom className,
-                                           uint32_t classNameOffset,
-                                           bool hasHeritage);
-
-    bool checkLabelOrIdentifierReference(PropertyName* ident,
+    bool checkLabelOrIdentifierReference(HandlePropertyName ident,
                                          uint32_t offset,
-                                         YieldHandling yieldHandling,
-                                         TokenKind hint = TOK_LIMIT);
+                                         YieldHandling yieldHandling);
 
-    bool checkLocalExportName(PropertyName* ident, uint32_t offset) {
+    bool checkLocalExportName(HandlePropertyName ident, uint32_t offset) {
         return checkLabelOrIdentifierReference(ident, offset, YieldIsName);
     }
 
-    bool checkBindingIdentifier(PropertyName* ident,
+    bool checkBindingIdentifier(HandlePropertyName ident,
                                 uint32_t offset,
-                                YieldHandling yieldHandling,
-                                TokenKind hint = TOK_LIMIT);
+                                YieldHandling yieldHandling);
 
     PropertyName* labelOrIdentifierReference(YieldHandling yieldHandling);
 
@@ -1497,8 +1520,8 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
     bool matchInOrOf(bool* isForInp, bool* isForOfp);
 
     bool hasUsedFunctionSpecialName(HandlePropertyName name);
-    bool declareFunctionArgumentsObject(bool canSkipLazyClosedOverBindings);
-    bool declareFunctionThis(bool canSkipLazyClosedOverBindings);
+    bool declareFunctionArgumentsObject();
+    bool declareFunctionThis();
     NameNodeType newInternalDotName(HandlePropertyName name);
     NameNodeType newThisName();
     NameNodeType newDotGeneratorName();
@@ -1571,15 +1594,9 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_TYPE)
     mozilla::Maybe<LexicalScope::Data*> newLexicalScopeData(ParseContext::Scope& scope);
     LexicalScopeNodeType finishLexicalScope(ParseContext::Scope& scope, Node body);
 
-    enum PropertyNameContext { PropertyNameInLiteral, PropertyNameInPattern, PropertyNameInClass };
     Node propertyName(YieldHandling yieldHandling,
-                      PropertyNameContext propertyNameContext,
                       const mozilla::Maybe<DeclarationKind>& maybeDecl, ListNodeType propList,
-                      MutableHandleAtom propAtom);
-    Node propertyOrMethodName(YieldHandling yieldHandling,
-                              PropertyNameContext propertyNameContext,
-                              const mozilla::Maybe<DeclarationKind>& maybeDecl, ListNodeType propList,
-                              PropertyType* propType, MutableHandleAtom propAtom);
+                      PropertyType* propType, MutableHandleAtom propAtom);
     UnaryNodeType computedPropertyName(YieldHandling yieldHandling,
                                        const mozilla::Maybe<DeclarationKind>& maybeDecl, ListNodeType literal);
     ListNodeType arrayInitializer(YieldHandling yieldHandling, PossibleError* possibleError);

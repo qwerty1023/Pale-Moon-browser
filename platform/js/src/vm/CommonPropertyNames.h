@@ -16,7 +16,6 @@
     macro(anonymous, anonymous, "anonymous") \
     macro(Any, Any, "Any") \
     macro(apply, apply, "apply") \
-    macro(args, args, "args") \
     macro(arguments, arguments, "arguments") \
     macro(ArrayBufferSpecies, ArrayBufferSpecies, "ArrayBufferSpecies") \
     macro(ArrayIterator, ArrayIterator, "Array Iterator") \
@@ -103,10 +102,6 @@
     macro(dotAll, dotAll, "dotAll") \
     macro(dotGenerator, dotGenerator, ".generator") \
     macro(dotThis, dotThis, ".this") \
-    macro(dotInitializers, dotInitializers, ".initializers") \
-    macro(dotFieldKeys, dotFieldKeys, ".fieldKeys") \
-    macro(dotStaticInitializers, dotStaticInitializers, ".staticInitializers") \
-    macro(dotStaticFieldKeys, dotStaticFieldKeys, ".staticFieldKeys") \
     macro(each, each, "each") \
     macro(elementType, elementType, "elementType") \
     macro(else, else_, "else") \
@@ -160,6 +155,7 @@
     macro(GeneratorFunction, GeneratorFunction, "GeneratorFunction") \
     macro(get, get, "get") \
     macro(getInternals, getInternals, "getInternals") \
+    macro(GetModuleNamespace, GetModuleNamespace, "GetModuleNamespace") \
     macro(getOwnPropertyDescriptor, getOwnPropertyDescriptor, "getOwnPropertyDescriptor") \
     macro(getOwnPropertyNames, getOwnPropertyNames, "getOwnPropertyNames") \
     macro(getPrefix, getPrefix, "get ") \
@@ -231,6 +227,7 @@
     macro(maximumFractionDigits, maximumFractionDigits, "maximumFractionDigits") \
     macro(maximumSignificantDigits, maximumSignificantDigits, "maximumSignificantDigits") \
     macro(message, message, "message") \
+    macro(meta, meta, "meta") \
     macro(minDays, minDays, "minDays") \
     macro(minimumFractionDigits, minimumFractionDigits, "minimumFractionDigits") \
     macro(minimumIntegerDigits, minimumIntegerDigits, "minimumIntegerDigits") \

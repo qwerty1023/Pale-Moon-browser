@@ -312,7 +312,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_AS)
     Node newGenExp(Node callee, Node args) { return NodeGeneric; }
 
     ListNodeType newObjectLiteral(uint32_t begin) { return NodeUnparenthesizedObject; }
-    ListNodeType newClassMemberList(uint32_t begin) { return NodeGeneric; }
+    ListNodeType newClassMethodList(uint32_t begin) { return NodeGeneric; }
     ClassNamesType newClassNames(Node outer, Node inner, const TokenPos& pos) { return NodeGeneric; }
     ClassNodeType newClass(Node name, Node heritage, Node methodBlock, const TokenPos& pos) { return NodeGeneric; }
 
@@ -331,10 +331,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_AS)
     MOZ_MUST_USE bool addShorthand(ListNodeType literal, NameNodeType name, NameNodeType expr) { return true; }
     MOZ_MUST_USE bool addSpreadProperty(ListNodeType literal, uint32_t begin, Node inner) { return true; }
     MOZ_MUST_USE bool addObjectMethodDefinition(ListNodeType literal, Node name, FunctionNodeType funNode, JSOp op) { return true; }
-    MOZ_MUST_USE Node newClassMethodDefinition(Node key, FunctionNodeType funNode, JSOp op, bool isStatic) { return NodeGeneric; }
-    MOZ_MUST_USE Node newClassFieldDefinition(Node name, FunctionNodeType initializer, bool isStatic) { return NodeGeneric; }
-    MOZ_MUST_USE Node newStaticClassBlock(FunctionNodeType block) { return NodeGeneric; }
-    MOZ_MUST_USE bool addClassMemberDefinition(ListNodeType memberList, Node member) { return true; }
+    MOZ_MUST_USE bool addClassMethodDefinition(ListNodeType literal, Node name, FunctionNodeType funNode, JSOp op, bool isStatic) { return true; }
     UnaryNodeType newYieldExpression(uint32_t begin, Node value) { return NodeGeneric; }
     UnaryNodeType newYieldStarExpression(uint32_t begin, Node value) { return NodeGeneric; }
     UnaryNodeType newAwaitExpression(uint32_t begin, Node value) { return NodeGeneric; }
@@ -355,6 +352,12 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_AS)
         return NodeGeneric;
     }
     BinaryNodeType newExportDefaultDeclaration(Node kid, Node maybeBinding, const TokenPos& pos) {
+        return NodeGeneric;
+    }
+    Node newImportMeta(Node importHolder, Node metaHolder) {
+        return NodeGeneric;
+    }
+    Node newCallImport(Node importHolder, Node singleArg) {
         return NodeGeneric;
     }
 
@@ -414,7 +417,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_AS)
 
     void checkAndSetIsDirectRHSAnonFunction(Node pn) {}
 
-    FunctionNodeType newFunction(FunctionSyntaxKind syntaxKind, const TokenPos& pos) { return NodeFunctionDefinition; }
+    FunctionNodeType newFunction(FunctionSyntaxKind syntaxKind) { return NodeFunctionDefinition; }
 
     bool setComprehensionLambdaBody(FunctionNodeType funNode, ListNodeType body) { return true; }
     void setFunctionFormalParametersAndBody(FunctionNodeType funNode, ListNodeType paramsBody) {}
@@ -465,7 +468,7 @@ FOR_EACH_PARSENODE_SUBCLASS(DECLARE_AS)
         MOZ_ASSERT(kind != PNK_CONST);
         return NodeGeneric;
     }
-    ListNodeType newList(ParseNodeKind kind, const TokenPos& pos, JSOp op = JSOP_NOP) {
+    ListNodeType newList(ParseNodeKind kind, uint32_t begin, JSOp op = JSOP_NOP) {
         return newList(kind, op);
     }
     ListNodeType newList(ParseNodeKind kind, Node kid, JSOp op = JSOP_NOP) {

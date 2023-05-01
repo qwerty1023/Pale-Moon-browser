@@ -155,7 +155,6 @@ class FunctionContextFlags
 
     bool needsHomeObject:1;
     bool isDerivedClassConstructor:1;
-    bool isFieldInitializer:1;
 
     // Whether this function has a .this binding. If true, we need to emit
     // JSOP_FUNCTIONTHIS in the prologue to initialize it.
@@ -171,7 +170,6 @@ class FunctionContextFlags
         definitelyNeedsArgsObj(false),
         needsHomeObject(false),
         isDerivedClassConstructor(false),
-        isFieldInitializer(false),
         hasThisBinding(false),
         hasInnerFunctions(false)
     { }
@@ -245,7 +243,6 @@ class SharedContext
     bool allowNewTarget_;
     bool allowSuperProperty_;
     bool allowSuperCall_;
-    bool allowArguments_;
     bool inWith_;
     bool needsThisTDZChecks_;
 
@@ -265,7 +262,6 @@ class SharedContext
         allowNewTarget_(false),
         allowSuperProperty_(false),
         allowSuperCall_(false),
-        allowArguments_(true),
         inWith_(false),
         needsThisTDZChecks_(false)
     { }
@@ -290,7 +286,6 @@ class SharedContext
     bool allowNewTarget()              const { return allowNewTarget_; }
     bool allowSuperProperty()          const { return allowSuperProperty_; }
     bool allowSuperCall()              const { return allowSuperCall_; }
-    bool allowArguments()              const { return allowArguments_; }
     bool inWith()                      const { return inWith_; }
     bool needsThisTDZChecks()          const { return needsThisTDZChecks_; }
 
@@ -432,8 +427,6 @@ class FunctionBox : public ObjectBox, public SharedContext
     bool            isExprBody_:1;          /* arrow function with expression
                                              * body or expression closure:
                                              * function(x) x*x */
-    bool            allowReturn_ : 1;       /* Used to issue an early error in static class blocks. */
-
 
     FunctionContextFlags funCxFlags;
 
@@ -458,7 +451,7 @@ class FunctionBox : public ObjectBox, public SharedContext
 
     void initFromLazyFunction();
     void initStandaloneFunction(Scope* enclosingScope);
-    void initWithEnclosingParseContext(ParseContext* enclosing, FunctionSyntaxKind kind); 
+    void initWithEnclosingParseContext(ParseContext* enclosing, FunctionSyntaxKind kind);
 
     ObjectBox* toObjectBox() override { return this; }
     JSFunction* function() const { return &object->as<JSFunction>(); }
@@ -525,8 +518,6 @@ class FunctionBox : public ObjectBox, public SharedContext
         isExprBody_ = true;
     }
 
-    bool allowReturn() const { return allowReturn_; }
-
     void setGeneratorKind(GeneratorKind kind) {
         // A generator kind can be set at initialization, or when "yield" is
         // first seen.  In both cases the transition can only happen from
@@ -542,7 +533,6 @@ class FunctionBox : public ObjectBox, public SharedContext
     bool needsHomeObject()           const { return funCxFlags.needsHomeObject; }
     bool isDerivedClassConstructor() const { return funCxFlags.isDerivedClassConstructor; }
     bool hasInnerFunctions()         const { return funCxFlags.hasInnerFunctions; }
-    bool isFieldInitializer()        const { return funCxFlags.isFieldInitializer; }
 
     void setHasExtensibleScope()           { funCxFlags.hasExtensibleScope       = true; }
     void setHasThisBinding()               { funCxFlags.hasThisBinding           = true; }
@@ -554,8 +544,6 @@ class FunctionBox : public ObjectBox, public SharedContext
     void setDerivedClassConstructor()      { MOZ_ASSERT(function()->isClassConstructor());
                                              funCxFlags.isDerivedClassConstructor = true; }
     void setHasInnerFunctions()            { funCxFlags.hasInnerFunctions         = true; }
-    void setFieldInitializer()             { MOZ_ASSERT(function()->isMethod());
-                                             funCxFlags.isFieldInitializer        = true; }
 
     bool hasSimpleParameterList() const {
         return !hasRest() && !hasParameterExprs && !hasDestructuringArgs;
@@ -575,11 +563,7 @@ class FunctionBox : public ObjectBox, public SharedContext
     }
 
     void setStart(const TokenStream& tokenStream) {
-        setStart(tokenStream, tokenStream.currentToken().pos);
-    }
-
-    void setStart(const TokenStream& tokenStream, const TokenPos& tokenPos) {
-        bufStart = tokenPos.begin;
+        bufStart = tokenStream.currentToken().pos.begin;
         tokenStream.srcCoords.lineNumAndColumnIndex(bufStart, &startLine, &startColumn);
     }
 

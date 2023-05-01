@@ -110,11 +110,11 @@ PropOpEmitter::emitGet(JSAtom* prop)
 bool
 PropOpEmitter::prepareForRhs()
 {
-    MOZ_ASSERT(isSimpleAssignment() || isPropInit() || isCompoundAssignment());
-    MOZ_ASSERT_IF(isSimpleAssignment() || isPropInit(), state_ == State::Obj);
+    MOZ_ASSERT(isSimpleAssignment() || isCompoundAssignment());
+    MOZ_ASSERT_IF(isSimpleAssignment(), state_ == State::Obj);
     MOZ_ASSERT_IF(isCompoundAssignment(), state_ == State::Get);
 
-    if (isSimpleAssignment() || isPropInit()) {
+    if (isSimpleAssignment()) {
         // For CompoundAssignment, SUPERBASE is already emitted by emitGet.
         if (isSuper()) {
             if (!bce_->emit1(JSOP_SUPERBASE)) {       // THIS SUPERBASE
@@ -133,7 +133,7 @@ bool
 PropOpEmitter::skipObjAndRhs()
 {
     MOZ_ASSERT(state_ == State::Start);
-    MOZ_ASSERT(isSimpleAssignment() || isPropInit());
+    MOZ_ASSERT(isSimpleAssignment());
 
 #ifdef DEBUG
     state_ = State::Rhs;
@@ -182,20 +182,18 @@ PropOpEmitter::emitDelete(JSAtom* prop)
 bool
 PropOpEmitter::emitAssignment(JSAtom* prop)
 {
-    MOZ_ASSERT(isSimpleAssignment() || isPropInit() || isCompoundAssignment());
+    MOZ_ASSERT(isSimpleAssignment() || isCompoundAssignment());
     MOZ_ASSERT(state_ == State::Rhs);
 
-    if (isSimpleAssignment() || isPropInit()) {
+    if (isSimpleAssignment()) {
         if (!prepareAtomIndex(prop)) {
             return false;
         }
     }
 
-    MOZ_ASSERT_IF(isPropInit(), !isSuper());
-    JSOp setOp = isPropInit() ? JSOP_INITPROP
-                              : isSuper()
-                                ? bce_->sc->strict() ? JSOP_STRICTSETPROP_SUPER : JSOP_SETPROP_SUPER
-                                : bce_->sc->strict() ? JSOP_STRICTSETPROP : JSOP_SETPROP;
+    JSOp setOp = isSuper()
+                 ? bce_->sc->strict() ? JSOP_STRICTSETPROP_SUPER : JSOP_SETPROP_SUPER
+                 : bce_->sc->strict() ? JSOP_STRICTSETPROP : JSOP_SETPROP;
     if (!bce_->emitAtomOp(propAtomIndex_, setOp)) {   // VAL
         return false;
     }

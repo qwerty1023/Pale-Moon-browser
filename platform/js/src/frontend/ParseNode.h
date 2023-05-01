@@ -49,7 +49,6 @@ class ObjectBox;
     F(CALL) \
     F(ARGUMENTS) \
     F(NAME) \
-    F(PRIVATE_NAME) \
     F(OBJECT_PROPERTY_NAME) \
     F(COMPUTED_NAME) \
     F(NUMBER) \
@@ -117,16 +116,15 @@ class ObjectBox;
     F(MUTATEPROTO) \
     F(CLASS) \
     F(CLASSMETHOD) \
-    F(STATICCLASSBLOCK) \
-    F(CLASSFIELD) \
-    F(CLASSMEMBERLIST) \
+    F(CLASSMETHODLIST) \
     F(CLASSNAMES) \
     F(NEWTARGET) \
     F(POSHOLDER) \
     F(SUPERBASE) \
     F(SUPERCALL) \
     F(SETTHIS) \
-    F(INITPROP) \
+    F(IMPORT_META) \
+    F(CALL_IMPORT) \
     \
     /* Unary operators. */ \
     F(TYPEOFNAME) \
@@ -170,13 +168,10 @@ class ObjectBox;
     F(POW) \
     \
     /* Assignment operators (= += -= etc.). */ \
-    /* AssignmentNode::test assumes all these are consecutive. */ \
+    /* ParseNode::isAssignment assumes all these are consecutive. */ \
     F(ASSIGN) \
     F(ADDASSIGN) \
     F(SUBASSIGN) \
-    F(COALESCEASSIGN) \
-    F(ORASSIGN) \
-    F(ANDASSIGN) \
     F(BITORASSIGN) \
     F(BITXORASSIGN) \
     F(BITANDASSIGN) \
@@ -255,22 +250,20 @@ IsTypeofKind(ParseNodeKind kind)
  * PNK_CLASS (ClassNode)
  *   kid1: PNK_CLASSNAMES for class name. can be null for anonymous class.
  *   kid2: expression after `extends`. null if no expression
- *   kid3: PNK_LEXICALSCOPE which contains PNK_CLASSMEMBERLIST as scopeBody
+ *   kid3: either of
+ *           * PNK_CLASSMETHODLIST, if anonymous class
+ *           * PNK_LEXICALSCOPE which contains PNK_CLASSMETHODLIST as scopeBody,
+ *             if named class
  * PNK_CLASSNAMES (ClassNames)
  *   left: Name node for outer binding, or null if the class is an expression
  *         that doesn't create an outer binding
  *   right: Name node for inner binding
- * PNK_CLASSMEMBERLIST (ListNode)
- *   head: list of N PNK_CLASSMETHOD, PNK_CLASSFIELD or PNK_STATICCLASSBLOCK nodes
+ * PNK_CLASSMETHODLIST (ListNode)
+ *   head: list of N PNK_CLASSMETHOD nodes
  *   count: N >= 0
  * PNK_CLASSMETHOD (ClassMethod)
  *   name: propertyName
  *   method: methodDefinition
- * PNK_CLASSFIELD (ClassField)
- *   name: fieldName
- *   initializer: field initializer or null
- * PNK_STATICCLASSBLOCK (StaticClassBlock)
- *   block: block initializer
  * PNK_MODULE (ModuleNode)
  *   body: statement list of the module
  *
@@ -390,16 +383,11 @@ IsTypeofKind(ParseNodeKind kind)
  * PNK_COMMA (ListNode)
  *   head: list of N comma-separated exprs
  *   count: N >= 2
- * PNK_INITPROP (BinaryNode)
- *   left: target of assignment, base-class setter will not be invoked
- *   right: value to assign
- * PNK_ASSIGN (AssignmentNode)
+ * PNK_ASSIGN (BinaryNode)
  *   left: target of assignment
  *   right: value to assign
- * PNK_ADDASSIGN, PNK_SUBASSIGN,
- * PNK_COALESCEASSIGN, PNK_ORASSIGN, PNK_ANDASSIGN,
- * PNK_BITORASSIGN, PNK_BITXORASSIGN, PNK_BITANDASSIGN,
- * PNK_LSHASSIGN, PNK_RSHASSIGN, PNK_URSHASSIGN,
+ * PNK_ADDASSIGN, PNK_SUBASSIGN, PNK_BITORASSIGN, PNK_BITXORASSIGN,
+ * PNK_BITANDASSIGN, PNK_LSHASSIGN, PNK_RSHASSIGN, PNK_URSHASSIGN,
  * PNK_MULASSIGN, PNK_DIVASSIGN, PNK_MODASSIGN, PNK_POWASSIGN (AssignmentNode)
  *   left: target of assignment
  *   right: value to assign
@@ -555,6 +543,8 @@ IsTypeofKind(ParseNodeKind kind)
  * PNK_ARRAYPUSH    unary   pn_op: JSOP_ARRAYCOMP
  *                          pn_kid: array comprehension expression
  * PNK_NOP (NullaryNode)
+ * PNK_IMPORT_META (BinaryNode)
+ * PNK_CALL_IMPORT (BinaryNode)
  */
 enum ParseNodeArity
 {
@@ -577,8 +567,6 @@ enum ParseNodeArity
     macro(AssignmentNode, AssignmentNodeType, asAssignment) \
     macro(CaseClause, CaseClauseType, asCaseClause) \
     macro(ClassMethod, ClassMethodType, asClassMethod) \
-    macro(ClassField, ClassFieldType, asClassField) \
-    macro(StaticClassBlock, StaticClassBlockType, asStaticClassBlock) \
     macro(ClassNames, ClassNamesType, asClassNames) \
     macro(ForNode, ForNodeType, asFor) \
     macro(PropertyAccess, PropertyAccessType, asPropertyAccess) \
@@ -630,10 +618,7 @@ enum class FunctionSyntaxKind
     Expression,                                  // A non-arrow function expression.
     Statement,                                   // A named function appearing as a Statement.
     Arrow,
-    Method,                                      // Method of a class or object.
-    FieldInitializer,                            // Field initializers desugar to methods.
-    StaticClassBlock,                            // Mostly static class blocks act similar to field initializers, however,
-                                                 // there is some difference in static semantics.
+    Method,
     ClassConstructor,
     DerivedClassConstructor,
     Getter,
@@ -667,7 +652,6 @@ static inline bool
 IsMethodDefinitionKind(FunctionSyntaxKind kind)
 {
     return kind == FunctionSyntaxKind::Method ||
-           kind == FunctionSyntaxKind::FieldInitializer ||
            IsConstructorKind(kind) ||
            IsGetterKind(kind) || IsSetterKind(kind);
 }
@@ -770,7 +754,6 @@ class ParseNode
           private:
             friend class BinaryNode;
             friend class ForNode;
-            friend class ClassField;
             friend class ClassMethod;
             friend class PropertyAccessBase;
             friend class SwitchStatement;
@@ -778,7 +761,7 @@ class ParseNode
             ParseNode*  right;
             union {
                 unsigned iflags;        /* JSITER_* flags for PNK_{COMPREHENSION,}FOR node */
-                bool isStatic;          /* only for PNK_CLASSMETHOD and PNK_CLASSFIELD */
+                bool isStatic;          /* only for PNK_CLASSMETHOD */
                 bool hasDefault;        /* only for PNK_SWITCH */
             };
         } binary;
@@ -1250,7 +1233,7 @@ class ListNode : public ParseNode
     MOZ_MUST_USE bool hasNonConstInitializer() const {
         MOZ_ASSERT(isKind(PNK_ARRAY) ||
                    isKind(PNK_OBJECT) ||
-                   isKind(PNK_CLASSMEMBERLIST));
+                   isKind(PNK_CLASSMETHODLIST));
         return pn_u.list.xflags & hasNonConstInitializerBit;
     }
 
@@ -1267,7 +1250,7 @@ class ListNode : public ParseNode
     void setHasNonConstInitializer() {
         MOZ_ASSERT(isKind(PNK_ARRAY) ||
                    isKind(PNK_OBJECT) ||
-                   isKind(PNK_CLASSMEMBERLIST));
+                   isKind(PNK_CLASSMETHODLIST));
         pn_u.list.xflags |= hasNonConstInitializerBit;
     }
 
@@ -1891,9 +1874,9 @@ class NullLiteral : public NullaryNode
     }
 };
 
-// This is only used internally, currently just for tagged templates and the
-// initial value of fields without initializers. It represents the value
-// 'undefined' (aka `void 0`), like NullLiteral represents the value 'null'.
+// This is only used internally, currently just for tagged templates.
+// It represents the value 'undefined' (aka `void 0`), like NullLiteral
+// represents the value 'null'.
 class RawUndefinedLiteral : public NullaryNode
 {
   public:
@@ -2141,55 +2124,6 @@ class ClassMethod : public BinaryNode
     }
 };
 
-
-class ClassField : public BinaryNode
-{
-  public:
-    ClassField(ParseNode* name, ParseNode* initializer, bool isStatic)
-      : BinaryNode(PNK_CLASSFIELD, JSOP_NOP,
-                   TokenPos::box(name->pn_pos, initializer->pn_pos),
-                   name, initializer)
-    {
-        pn_u.binary.isStatic = isStatic;
-    }
-
-    static bool test(const ParseNode& node) {
-        bool match = node.isKind(PNK_CLASSFIELD);
-        MOZ_ASSERT_IF(match, node.isArity(PN_BINARY));
-        return match;
-    }
-
-    ParseNode& name() const { return *left(); }
-
-    FunctionNode* initializer() const { return &right()->as<FunctionNode>(); }
-
-    bool isStatic() const {
-        return pn_u.binary.isStatic;
-    }
-};
-
-// Hold onto the function generated for a class static block like
-//
-// class A {
-//  static { /* this static block */ }
-// }
-//
-class StaticClassBlock : public UnaryNode
-{
-  public:
-    explicit StaticClassBlock(FunctionNode* function)
-        : UnaryNode(PNK_STATICCLASSBLOCK, JSOP_NOP, function->pn_pos, function) {
-    }
-
-    static bool test(const ParseNode& node) {
-        bool match = node.isKind(PNK_STATICCLASSBLOCK);
-        MOZ_ASSERT_IF(match, node.is<UnaryNode>());
-        return match;
-    }
-    FunctionNode* function() const { return &kid()->as<FunctionNode>(); }
-};
-
-
 class SwitchStatement : public BinaryNode
 {
   public:
@@ -2273,11 +2207,13 @@ class ClassNames : public BinaryNode
 class ClassNode : public TernaryNode
 {
   public:
-    ClassNode(ParseNode* names, ParseNode* heritage, LexicalScopeNode* memberBlock,
+    ClassNode(ParseNode* names, ParseNode* heritage, ParseNode* methodsOrBlock,
               const TokenPos& pos)
-      : TernaryNode(PNK_CLASS, JSOP_NOP, names, heritage, memberBlock, pos)
+      : TernaryNode(PNK_CLASS, JSOP_NOP, names, heritage, methodsOrBlock, pos)
     {
         MOZ_ASSERT_IF(names, names->is<ClassNames>());
+        MOZ_ASSERT(methodsOrBlock->is<LexicalScopeNode>() ||
+                   methodsOrBlock->isKind(PNK_CLASSMETHODLIST));
     }
 
     static bool test(const ParseNode& node) {
@@ -2292,14 +2228,18 @@ class ClassNode : public TernaryNode
     ParseNode* heritage() const {
         return kid2();
     }
-    ListNode* memberList() const {
-        ListNode* list = &kid3()->as<LexicalScopeNode>().scopeBody()->as<ListNode>();
-        MOZ_ASSERT(list->isKind(PNK_CLASSMEMBERLIST));
+    ListNode* methodList() const {
+        ParseNode* methodsOrBlock = kid3();
+        if (methodsOrBlock->isKind(PNK_CLASSMETHODLIST))
+            return &methodsOrBlock->as<ListNode>();
+
+        ListNode* list = &methodsOrBlock->as<LexicalScopeNode>().scopeBody()->as<ListNode>();
+        MOZ_ASSERT(list->isKind(PNK_CLASSMETHODLIST));
         return list;
     }
-    LexicalScopeNode* scopeBindings() const {
-        LexicalScopeNode* scope = &kid3()->as<LexicalScopeNode>();
-        return scope->isEmptyScope() ? nullptr : scope;
+    Handle<LexicalScope::Data*> scopeBindings() const {
+        ParseNode* scope = kid3();
+        return scope->as<LexicalScopeNode>().scopeBindings();
     }
 };
 

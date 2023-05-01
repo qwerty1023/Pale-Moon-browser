@@ -93,35 +93,18 @@ FindReservedWord(const CharT* s, size_t length)
 }
 
 static const ReservedWordInfo*
-FindReservedWord(JSLinearString* str, js::frontend::NameVisibility* visibility)
+FindReservedWord(JSLinearString* str)
 {
     JS::AutoCheckCannotGC nogc;
-    if (str->hasLatin1Chars()) {
-        const JS::Latin1Char* chars = str->latin1Chars(nogc);
-        size_t length = str->length();
-        if (length > 0 && chars[0] == '#') {
-            *visibility = js::frontend::NameVisibility::Private;
-            return nullptr;
-        }
-        *visibility = js::frontend::NameVisibility::Public;
-        return FindReservedWord(chars, length);
-    }
-
-    const char16_t* chars = str->twoByteChars(nogc);
-    size_t length = str->length();
-    if (length > 0 && chars[0] == '#') {
-        *visibility = js::frontend::NameVisibility::Private;
-        return nullptr;
-    }
-    *visibility = js::frontend::NameVisibility::Public;
-    return FindReservedWord(chars, length);
+    return str->hasLatin1Chars()
+           ? FindReservedWord(str->latin1Chars(nogc), str->length())
+           : FindReservedWord(str->twoByteChars(nogc), str->length());
 }
 
 template <typename CharT>
 static bool
 IsIdentifier(const CharT* chars, size_t length)
 {
-    // Generic version for latin1 in char* and UCS-2 in char16_t*
     if (length == 0)
         return false;
 
@@ -155,52 +138,14 @@ GetSingleCodePoint(const char16_t** p, const char16_t* end)
     return codePoint;
 }
 
-namespace js {
-
-namespace frontend {
-
-// Latin1 Variants
-
-bool
-IsIdentifier(const Latin1Char* chars, size_t length)
-{
-    return ::IsIdentifier(chars, length);
-}
-
-static bool
-IsIdentifierNameOrPrivateName(const Latin1Char* chars, size_t length)
-{
-    if (length == 0)
-        return false;
-
-    if (char16_t(*chars) == '#') {
-        ++chars;
-        --length;
-    }
-
-    return IsIdentifier(chars, length);
-}
-
-// UTF-16 Versions
-
-bool
-IsIdentifier(const char16_t* chars, size_t length)
-{
-    return ::IsIdentifier(chars, length);
-}
-
 static bool
 IsIdentifierMaybeNonBMP(const char16_t* chars, size_t length)
 {
+    if (IsIdentifier(chars, length))
+        return true;
+
     if (length == 0)
         return false;
-    // XXX Revisit if this is still faster.
-    //     Assumption is that iterating the string twice in the rare worst case (not a valid UCS-2
-    //     identifier, but valid in UTF-16) is on average better than parsing UTF-16 code points
-    //     individually for every input.
-    if (IsIdentifier(chars, length)) {
-        return true;
-    }
 
     const char16_t* p = chars;
     const char16_t* end = chars + length;
@@ -219,78 +164,71 @@ IsIdentifierMaybeNonBMP(const char16_t* chars, size_t length)
     return true;
 }
 
-static bool
-IsIdentifierNameOrPrivateNameMaybeNonBMP(const char16_t* chars, size_t length)
-{
-    if (length == 0)
-        return false;
-
-    // '#' is always just one character in either UCS-2 or UTF-16, so compare it directly.
-    if (char16_t(*chars) == '#') {
-        ++chars;
-        --length;
-    }
-
-    return IsIdentifierMaybeNonBMP(chars, length);
-}
-
 bool
-IsIdentifier(JSLinearString* str)
+frontend::IsIdentifier(JSLinearString* str)
 {
     JS::AutoCheckCannotGC nogc;
-    if (str->hasLatin1Chars()) {
-        return IsIdentifier(str->latin1Chars(nogc), str->length());
-
-    }
-    return IsIdentifierMaybeNonBMP(str->twoByteChars(nogc), str->length());
+    return str->hasLatin1Chars()
+           ? ::IsIdentifier(str->latin1Chars(nogc), str->length())
+           : ::IsIdentifierMaybeNonBMP(str->twoByteChars(nogc), str->length());
 }
 
 bool
-IsIdentifierNameOrPrivateName(JSLinearString* str)
+frontend::IsIdentifier(const char* chars, size_t length)
 {
-    JS::AutoCheckCannotGC nogc;
-    if (str->hasLatin1Chars()) {
-        return IsIdentifierNameOrPrivateName(str->latin1Chars(nogc), str->length());
-
-    }
-    return IsIdentifierNameOrPrivateNameMaybeNonBMP(str->twoByteChars(nogc), str->length());
+    return ::IsIdentifier(chars, length);
 }
 
 bool
-IsKeyword(JSLinearString* str)
+frontend::IsIdentifier(const char16_t* chars, size_t length)
 {
-    NameVisibility visibility;
-    if (const ReservedWordInfo* rw = FindReservedWord(str, &visibility))
+    return ::IsIdentifier(chars, length);
+}
+
+bool
+frontend::IsKeyword(JSLinearString* str)
+{
+    if (const ReservedWordInfo* rw = FindReservedWord(str))
         return TokenKindIsKeyword(rw->tokentype);
 
     return false;
 }
 
-TokenKind
-ReservedWordTokenKind(PropertyName* str)
+bool
+frontend::IsFutureReservedWord(JSLinearString* str)
 {
-    NameVisibility visibility;
-    if (const ReservedWordInfo* rw = FindReservedWord(str, &visibility))
-        return rw->tokentype;
+    if (const ReservedWordInfo* rw = FindReservedWord(str))
+        return TokenKindIsFutureReservedWord(rw->tokentype);
 
-    return visibility == NameVisibility::Private ? TOK_PRIVATE_NAME : TOK_NAME;
+    return false;
+}
+
+bool
+frontend::IsStrictReservedWord(JSLinearString* str)
+{
+    if (const ReservedWordInfo* rw = FindReservedWord(str))
+        return TokenKindIsStrictReservedWord(rw->tokentype);
+
+    return false;
+}
+
+bool
+frontend::IsReservedWordLiteral(JSLinearString* str)
+{
+    if (const ReservedWordInfo* rw = FindReservedWord(str))
+        return TokenKindIsReservedWordLiteral(rw->tokentype);
+
+    return false;
 }
 
 const char*
-ReservedWordToCharZ(PropertyName* str)
+frontend::ReservedWordToCharZ(PropertyName* str)
 {
-    NameVisibility visibility;
-    if (const ReservedWordInfo* rw = FindReservedWord(str, &visibility))
-        return ReservedWordToCharZ(rw->tokentype);
+    const ReservedWordInfo* rw = FindReservedWord(str);
+    if (rw == nullptr)
+        return nullptr;
 
-    return nullptr;
-}
-
-const char*
-ReservedWordToCharZ(TokenKind tt)
-{
-    MOZ_ASSERT(tt != TOK_NAME);
-    switch (tt) {
+    switch (rw->tokentype) {
 #define EMIT_CASE(word, name, type) case type: return js_##word##_str;
       FOR_EACH_JAVASCRIPT_RESERVED_WORD(EMIT_CASE)
 #undef EMIT_CASE
@@ -299,10 +237,6 @@ ReservedWordToCharZ(TokenKind tt)
     }
     return nullptr;
 }
-
-} // namespace frontend
-
-} // namespace js
 
 PropertyName*
 TokenStream::reservedWordToPropertyName(TokenKind tt) const
@@ -670,7 +604,7 @@ TokenStream::TokenBuf::findEOLMax(size_t start, size_t max)
         if (n >= max)
             break;
         n++;
-
+        
         // This stops at U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR in
         // string and template literals.  These code points do affect line and
         // column coordinates, even as they encode their literal values.
@@ -1380,7 +1314,6 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
     bool hasExp;
     DecimalPoint decimalPoint;
     const char16_t* identStart;
-    NameVisibility identVisibility;
     bool hadUnicodeEscape;
 
     // Check if in the middle of a template string. Have to get this out of
@@ -1425,7 +1358,6 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
         if (unicode::IsUnicodeIDStart(char16_t(c))) {
             identStart = userbuf.addressOfNextRawChar() - 1;
             hadUnicodeEscape = false;
-            identVisibility = NameVisibility::Public;
             goto identifier;
         }
 
@@ -1436,7 +1368,6 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
             {
                 identStart = userbuf.addressOfNextRawChar() - 2;
                 hadUnicodeEscape = false;
-                identVisibility = NameVisibility::Public;
                 goto identifier;
             }
         }
@@ -1485,7 +1416,6 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
         tp = newToken(-1);
         identStart = userbuf.addressOfNextRawChar() - 1;
         hadUnicodeEscape = false;
-        identVisibility = NameVisibility::Public;
 
       identifier:
         for (;;) {
@@ -1527,14 +1457,11 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
             length = userbuf.addressOfNextRawChar() - identStart;
         }
 
-        // Private identifiers start with a '#', and so cannot be reserved words.
-        if (identVisibility == NameVisibility::Public) {
-            // Represent reserved words as reserved word tokens.
-            if (!hadUnicodeEscape) {
-                if (const ReservedWordInfo* rw = FindReservedWord(chars, length)) {
-                    tp->type = rw->tokentype;
-                    goto out;
-                }
+        // Represent reserved words as reserved word tokens.
+        if (!hadUnicodeEscape) {
+            if (const ReservedWordInfo* rw = FindReservedWord(chars, length)) {
+                tp->type = rw->tokentype;
+                goto out;
             }
         }
 
@@ -1542,17 +1469,7 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
         if (!atom) {
             goto error;
         }
-        if (identVisibility == NameVisibility::Private) {
-            MOZ_ASSERT(identStart[0] == '#', "Private identifier starts with #");
-            tp->type = TOK_PRIVATE_NAME;
-
-            if (!options().fieldsEnabledOption) {
-                reportError(JSMSG_FIELDS_NOT_SUPPORTED);
-                goto error;
-            }
-        } else {
-            tp->type = TOK_NAME;
-        }
+        tp->type = TOK_NAME;
         tp->setName(atom->asPropertyName());
         goto out;
     }
@@ -1857,31 +1774,14 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
         if (escapeLength > 0) {
             identStart = userbuf.addressOfNextRawChar() - escapeLength - 1;
             hadUnicodeEscape = true;
-            identVisibility = NameVisibility::Public;
             goto identifier;
         }
-        goto badchar;
-      }
-
-      case '#': {
-        // TODO: This does not handle escaped private property names due to being extremely difficult
-        //       in the current state of the tokenizer. If #1351107 is ported, it becomes straightforward.
-        c = getCharIgnoreEOL();
-        // '$' and '_' are not in IsUnicodeIDStart
-        c1kind = FirstCharKind(firstCharKinds[c]);
-        if (c1kind == Ident || unicode::IsUnicodeIDStart(char16_t(c))) {
-            identStart = userbuf.addressOfNextRawChar() - 2;
-            hadUnicodeEscape = false;
-            identVisibility = NameVisibility::Private;
-            goto identifier;
-        }
-        ungetCharIgnoreEOL(c);
         goto badchar;
       }
 
       case '|':
         if (matchChar('|'))
-            tp->type = matchChar('=') ? TOK_ORASSIGN : TOK_OR;
+            tp->type = TOK_OR;
         else
             tp->type = matchChar('=') ? TOK_BITORASSIGN : TOK_BITOR;
         goto out;
@@ -1892,7 +1792,7 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
 
       case '&':
         if (matchChar('&'))
-            tp->type = matchChar('=') ? TOK_ANDASSIGN : TOK_AND;
+            tp->type = TOK_AND;
         else
             tp->type = matchChar('=') ? TOK_BITANDASSIGN : TOK_BITAND;
         goto out;
@@ -1911,10 +1811,8 @@ TokenStream::getTokenInternal(TokenKind* ttp, Modifier modifier)
                 ungetCharIgnoreEOL(c);
                 tp->type = TOK_OPTCHAIN;
             }
-        } else if (matchChar('?')) {
-            tp->type = matchChar('=') ? TOK_COALESCEASSIGN : TOK_COALESCE;
-        } else  {
-            tp->type = TOK_HOOK;
+        } else {
+            tp->type = matchChar('?') ? TOK_COALESCE : TOK_HOOK;
         }
         goto out;
 
@@ -2349,7 +2247,7 @@ TokenStream::getStringOrTemplateToken(int untilChar, Token** tp)
             updateFlagsForEOL();
         } else if (c == LINE_SEPARATOR || c == PARA_SEPARATOR) {
             // U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR encode
-            // their literal values in template literals and (as of the
+            // their literal values in template literals and (as of the 
             // JSON superset proposal) string literals, but they still count
             // as line terminators when computing line/column coordinates.
             updateLineInfoForEOL();

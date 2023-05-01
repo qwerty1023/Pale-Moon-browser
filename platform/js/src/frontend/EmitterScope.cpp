@@ -370,7 +370,7 @@ EmitterScope::appendScopeNote(BytecodeEmitter* bce)
 }
 
 bool
-EmitterScope::deadZoneFrameSlotRange(BytecodeEmitter* bce, uint32_t slotStart, uint32_t slotEnd) const
+EmitterScope::deadZoneFrameSlotRange(BytecodeEmitter* bce, uint32_t slotStart, uint32_t slotEnd)
 {
     // Lexical bindings throw ReferenceErrors if they are used before
     // initialization. See ES6 8.1.1.1.6.
@@ -993,7 +993,7 @@ EmitterScope::enterWith(BytecodeEmitter* bce)
 }
 
 bool
-EmitterScope::deadZoneFrameSlots(BytecodeEmitter* bce) const
+EmitterScope::deadZoneFrameSlots(BytecodeEmitter* bce)
 {
     return deadZoneFrameSlotRange(bce, frameSlotStart(), frameSlotEnd());
 }

@@ -236,7 +236,6 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
       case PNK_PREDECREMENT:
       case PNK_POSTDECREMENT:
       case PNK_COMPUTED_NAME:
-      case PNK_STATICCLASSBLOCK:
       case PNK_ARRAYPUSH:
       case PNK_SPREAD:
       case PNK_MUTATEPROTO:
@@ -258,13 +257,9 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
       // Binary nodes with two non-null children.
 
       // All assignment and compound assignment nodes qualify.
-      case PNK_INITPROP:
       case PNK_ASSIGN:
       case PNK_ADDASSIGN:
       case PNK_SUBASSIGN:
-      case PNK_COALESCEASSIGN:
-      case PNK_ORASSIGN:
-      case PNK_ANDASSIGN:
       case PNK_BITORASSIGN:
       case PNK_BITXORASSIGN:
       case PNK_BITANDASSIGN:
@@ -298,6 +293,8 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
       case PNK_SETTHIS:
       case PNK_FOR:
       case PNK_COMPREHENSIONFOR:
+      case PNK_IMPORT_META:
+      case PNK_CALL_IMPORT:
       case PNK_WITH: {
         BinaryNode* bn = &pn->as<BinaryNode>();
         stack->push(bn->left());
@@ -371,14 +368,6 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
         if (bn->right())
             stack->push(bn->right());
         return PushResult::Recyclable;
-      }
-
-      case PNK_CLASSFIELD: {
-          BinaryNode* bn = &pn->as<BinaryNode>();
-          stack->push(bn->left());
-          if (bn->right())
-              stack->push(bn->right());
-          return PushResult::Recyclable;
       }
 
       // Ternary nodes with all children non-null.
@@ -505,7 +494,7 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
       case PNK_IMPORT_SPEC_LIST:
       case PNK_EXPORT_SPEC_LIST:
       case PNK_PARAMSBODY:
-      case PNK_CLASSMEMBERLIST:
+      case PNK_CLASSMETHODLIST:
         return PushListNodeChildren(&pn->as<ListNode>(), stack);
 
       // Array comprehension nodes are lists with a single child:
@@ -892,7 +881,6 @@ NameNode::dump(int indent)
       }
       
       case PNK_NAME:
-      case PNK_PRIVATE_NAME: // atom() already includes the '#', no need to specially include it.
       case PNK_PROPERTYNAME: {
         if (!atom()) {
             fprintf(stderr, "#<null name>");
