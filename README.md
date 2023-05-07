@@ -5,9 +5,6 @@ laid out in a "comm-central" style configuration where only the code specific to
 
 The shared Unified XUL Platform source code is referenced here as a git submodule contained in the `platform/` directory and is required to build the application.
 
-## Getting the platform sub-module
-`git submodule init && git submodule update`
-
 ## Resources
 
  * [Build Pale Moon for Windows](https://developer.palemoon.org/build/windows/)
