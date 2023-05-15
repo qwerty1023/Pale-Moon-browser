@@ -227,6 +227,7 @@ class ExclusiveContext : public ContextFriendFields,
     bool jitSupportsUnalignedAccesses() const { return runtime_->jitSupportsUnalignedAccesses; }
     bool jitSupportsSimd() const { return runtime_->jitSupportsSimd; }
     bool lcovEnabled() const { return runtime_->lcovOutput.isEnabled(); }
+    bool moduleDynamicImportHook() const { return runtime_->moduleDynamicImportHook; }
 
     // Thread local data that may be accessed freely.
     DtoaState* dtoaState() {

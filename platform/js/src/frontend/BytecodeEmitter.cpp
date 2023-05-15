@@ -9624,7 +9624,7 @@ BytecodeEmitter::emitTree(ParseNode* pn, ValueUsage valueUsage /* = ValueUsage::
         break;
 
       case PNK_CALL_IMPORT:
-        if (!cx->compartment()->runtimeFromAnyThread()->moduleDynamicImportHook) {
+        if (!cx->moduleDynamicImportHook()) {
             reportError(nullptr, JSMSG_NO_DYNAMIC_IMPORT);
             return false;
         }
