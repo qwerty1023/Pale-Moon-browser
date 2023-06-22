@@ -4681,15 +4681,15 @@ JS::Evaluate(JSContext* cx, const ReadOnlyCompileOptions& optionsArg,
 }
 
 JS_PUBLIC_API(JS::ModuleResolveHook)
-JS::GetModuleResolveHook(JSContext* cx)
+JS::GetModuleResolveHook(JSRuntime* rt)
 {
-    return cx->runtime()->moduleResolveHook;
+    return rt->moduleResolveHook;
 }
 
 JS_PUBLIC_API(void)
-JS::SetModuleResolveHook(JSContext* cx, JS::ModuleResolveHook func)
+JS::SetModuleResolveHook(JSRuntime* rt, JS::ModuleResolveHook func)
 {
-    cx->runtime()->moduleResolveHook = func;
+    rt->moduleResolveHook = func;
 }
 
 JS_PUBLIC_API(JS::ModuleMetadataHook)

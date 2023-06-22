@@ -4332,7 +4332,7 @@ using ModuleResolveHook = JSObject* (*)(JSContext*, HandleValue, HandleString);
  * Get the HostImportModuleDynamically hook for the runtime.
  */
 extern JS_PUBLIC_API(ModuleResolveHook)
-GetModuleResolveHook(JSContext* cx);
+GetModuleResolveHook(JSRuntime* rt);
 
 /**
  * Set the HostImportModuleDynamically hook for the runtime to the given
@@ -4342,7 +4342,7 @@ GetModuleResolveHook(JSContext* cx);
  * exception if dynamic module import is attempted.
  */
 extern JS_PUBLIC_API(void)
-SetModuleResolveHook(JSContext* cx, ModuleResolveHook func);
+SetModuleResolveHook(JSRuntime* rt, ModuleResolveHook func);
 
 using ModuleMetadataHook = bool (*)(JSContext*, HandleObject, HandleObject);
 

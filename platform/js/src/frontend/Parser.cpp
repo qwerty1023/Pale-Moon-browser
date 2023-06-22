@@ -11372,7 +11372,7 @@ Parser<ParseHandler>::importExpr(YieldHandling yieldHandling, bool allowCallSynt
             return null();
         }
 
-        if (!context->moduleDynamicImportHook() && !abortIfSyntaxParser()) {
+        if (!context->compartment()->runtimeFromAnyThread()->moduleDynamicImportHook && !abortIfSyntaxParser()) {
             return null();
         }
 
