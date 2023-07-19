@@ -362,6 +362,32 @@ ToNumber(ExclusiveContext* cx, HandleValue v, double* out)
     return ToNumberSlow(cx, v, out);
 }
 
+bool
+ToNumericSlow(ExclusiveContext* cx, JS::MutableHandleValue vp);
+
+// BigInt proposal section 3.1.6
+MOZ_ALWAYS_INLINE MOZ_MUST_USE bool
+ToNumeric(ExclusiveContext* cx, JS::MutableHandleValue vp)
+{
+    if (vp.isNumber())
+        return true;
+    if (vp.isBigInt())
+        return true;
+    return ToNumericSlow(cx, vp);
+}
+
+bool
+ToInt32OrBigIntSlow(JSContext* cx, JS::MutableHandleValue vp);
+
+MOZ_ALWAYS_INLINE MOZ_MUST_USE bool
+ToInt32OrBigInt(JSContext* cx, JS::MutableHandleValue vp)
+{
+    if (vp.isInt32()) {
+        return true;
+    }
+    return ToInt32OrBigIntSlow(cx, vp);
+}
+
 void FIX_FPU();
 
 } /* namespace js */

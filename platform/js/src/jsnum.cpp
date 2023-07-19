@@ -524,15 +524,22 @@ Number(JSContext* cx, unsigned argc, Value* vp)
     bool isConstructing = args.isConstructing();
 
     if (args.length() > 0) {
-        if (!ToNumber(cx, args[0]))
+        // BigInt proposal section 6.2, steps 2a-c.
+        if (!ToNumeric(cx, args[0]))
             return false;
-        args.rval().set(args[0]);
-    } else {
-        args.rval().setInt32(0);
+        if (args[0].isBigInt())
+            args[0].setNumber(BigInt::numberValue(args[0].toBigInt()));
+        MOZ_ASSERT(args[0].isNumber());
     }
 
-    if (!isConstructing)
+    if (!isConstructing) {
+        if (args.length() > 0) {
+            args.rval().set(args[0]);
+        } else {
+            args.rval().setInt32(0);
+        }
         return true;
+    }
 
     RootedObject newTarget(cx, &args.newTarget().toObject());
     RootedObject proto(cx);
@@ -1492,6 +1499,30 @@ js::ToInt8Slow(JSContext *cx, const HandleValue v, int8_t *out)
     return true;
 }
 
+// BigInt proposal section 3.1.6
+bool
+js::ToNumericSlow(ExclusiveContext* cx, MutableHandleValue vp)
+{
+    MOZ_ASSERT(!vp.isNumber());
+    MOZ_ASSERT(!vp.isBigInt());
+
+    // Step 1.
+    if (!vp.isPrimitive()) {
+        if (!cx->isJSContext())
+            return false;
+        if (!ToPrimitive(cx->asJSContext(), JSTYPE_NUMBER, vp))
+            return false;
+    }
+
+    // Step 2.
+    if (vp.isBigInt()) {
+        return true;
+    }
+
+    // Step 3.
+    return ToNumber(cx->asJSContext(), vp);
+}
+
 /*
  * Convert a value to an uint8_t, according to the ToUInt8() function in ES6
  * ECMA-262, 7.1.10. Return converted value in *out on success, false on failure.
@@ -1580,6 +1611,27 @@ js::ToInt32Slow(JSContext* cx, const HandleValue v, int32_t* out)
             return false;
     }
     *out = ToInt32(d);
+    return true;
+}
+
+bool
+js::ToInt32OrBigIntSlow(JSContext* cx, MutableHandleValue vp)
+{
+    MOZ_ASSERT(!vp.isInt32());
+    if (vp.isDouble()) {
+        vp.setInt32(ToInt32(vp.toDouble()));
+        return true;
+    }
+
+    if (!ToNumeric(cx, vp)) {
+        return false;
+    }
+
+    if (vp.isBigInt()) {
+        return true;
+    }
+
+    vp.setInt32(ToInt32(vp.toNumber()));
     return true;
 }
 
