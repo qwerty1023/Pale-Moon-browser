@@ -28,8 +28,13 @@ nsContentDispatchChooser.prototype =
   {
     var window = null;
     try {
-      if (aWindowContext)
-        window = aWindowContext.getInterface(Ci.nsIDOMWindow);
+      if (aWindowContext) {
+        window = aWindowContext.getInterface(Ci.nsIWebNavigation)
+                    .QueryInterface(Ci.nsIDocShellTreeItem)
+                    .rootTreeItem
+                    .QueryInterface(Ci.nsIInterfaceRequestor)
+                    .getInterface(Ci.nsIDOMWindow);
+      }
     } catch (e) { /* it's OK to not have a window */ }
 
     var sbs = Cc["@mozilla.org/intl/stringbundle;1"].
