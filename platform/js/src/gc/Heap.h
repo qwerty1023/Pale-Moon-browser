@@ -1280,10 +1280,8 @@ JS::Zone*
 TenuredCell::zone() const
 {
     JS::Zone* zone = arena()->zone;
-    if (CurrentThreadCanAccessZone(zone))
-        return zone;
-
-    return nullptr;
+    MOZ_ASSERT(CurrentThreadCanAccessZone(zone));
+    return zone;
 }
 
 JS::Zone*

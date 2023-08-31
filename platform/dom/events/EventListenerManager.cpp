@@ -702,8 +702,6 @@ EventListenerManager::SetEventHandlerInternal(
                         const TypedEventHandler& aTypedHandler,
                         bool aPermitUntrustedEvents)
 {
-  auto removeEventHandler = MakeScopeExit([&] { RemoveEventHandler(aName, EmptyString()); });
-  
   MOZ_ASSERT(aName || !aTypeString.IsEmpty());
 
   EventMessage eventMessage = nsContentUtils::GetEventMessage(aName);
@@ -739,8 +737,6 @@ EventListenerManager::SetEventHandlerInternal(
     }
   }
 
-  removeEventHandler.release();
-  
   // Set flag to indicate possible need for compilation later
   listener->mHandlerIsString = !aTypedHandler.HasEventHandler();
   if (aPermitUntrustedEvents) {
@@ -757,6 +753,8 @@ EventListenerManager::SetEventHandler(nsIAtom* aName,
                                       bool aPermitUntrustedEvents,
                                       Element* aElement)
 {
+  auto removeEventHandler = MakeScopeExit([&] { RemoveEventHandler(aName, EmptyString()); });
+
   nsCOMPtr<nsIDocument> doc;
   nsCOMPtr<nsIScriptGlobalObject> global =
     GetScriptGlobalAndDocument(getter_AddRefs(doc));
@@ -830,6 +828,8 @@ EventListenerManager::SetEventHandler(nsIAtom* aName,
   nsIScriptContext* context = global->GetScriptContext();
   NS_ENSURE_TRUE(context, NS_ERROR_FAILURE);
   NS_ENSURE_STATE(global->GetGlobalJSObject());
+
+  removeEventHandler.release();
 
   Listener* listener = SetEventHandlerInternal(aName,
                                                EmptyString(),
