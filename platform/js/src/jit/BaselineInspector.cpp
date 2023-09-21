@@ -408,6 +408,11 @@ BaselineInspector::expectedBinaryArithSpecialization(jsbytecode* pc)
     MIRType result;
     ICStub* stubs[2];
 
+    if (JSOp(*pc) == JSOP_POS) {
+      // +x expanding to x*1, but no corresponding IC.
+      return MIRType::None;
+    }
+
     const ICEntry& entry = icEntryFromPC(pc);
     ICStub* stub = entry.fallbackStub();
     if (stub->isBinaryArith_Fallback() &&
@@ -619,25 +624,6 @@ BaselineInspector::getTemplateObjectForClassHook(jsbytecode* pc, const Class* cl
     for (ICStub* stub = entry.firstStub(); stub; stub = stub->next()) {
         if (stub->isCall_ClassHook() && stub->toCall_ClassHook()->clasp() == clasp)
             return stub->toCall_ClassHook()->templateObject();
-    }
-
-    return nullptr;
-}
-
-JSObject*
-BaselineInspector::getTemplateObjectForSimdCtor(jsbytecode* pc, SimdType simdType)
-{
-    if (!hasBaselineScript())
-        return nullptr;
-
-    const ICEntry& entry = icEntryFromPC(pc);
-    for (ICStub* stub = entry.firstStub(); stub; stub = stub->next()) {
-        if (stub->isCall_ClassHook() && stub->toCall_ClassHook()->clasp() == &SimdTypeDescr::class_) {
-            JSObject* templateObj = stub->toCall_ClassHook()->templateObject();
-            InlineTypedObject& typedObj = templateObj->as<InlineTypedObject>();
-            if (typedObj.typeDescr().as<SimdTypeDescr>().type() == simdType)
-                return templateObj;
-        }
     }
 
     return nullptr;

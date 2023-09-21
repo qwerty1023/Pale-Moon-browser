@@ -497,8 +497,13 @@ class IonBuilder
 
     // jsop_binary_arith helpers.
     MBinaryArithInstruction* binaryArithInstruction(JSOp op, MDefinition* left, MDefinition* right);
+    MIRType binaryArithNumberSpecialization(MDefinition* left, MDefinition* right);
     MOZ_MUST_USE bool binaryArithTryConcat(bool* emitted, JSOp op, MDefinition* left,
                                            MDefinition* right);
+    MOZ_MUST_USE MBinaryArithInstruction* binaryArithEmitSpecialized(MDefinition::Opcode op,
+                                                                     MIRType specialization,
+                                                                     MDefinition* left,
+                                                                     MDefinition* right);
     MOZ_MUST_USE bool binaryArithTrySpecialized(bool* emitted, JSOp op, MDefinition* left,
                                                 MDefinition* right);
     MOZ_MUST_USE bool binaryArithTrySpecializedOnBaselineInspector(bool* emitted, JSOp op,
@@ -509,6 +514,12 @@ class IonBuilder
 
     // jsop_bitnot helpers.
     MOZ_MUST_USE bool bitnotTrySpecialized(bool* emitted, MDefinition* input);
+
+    // jsop_inc_or_dec helpers.
+    MDefinition* unaryArithConvertToBinary(JSOp op, MDefinition::Opcode* defOp);
+    MOZ_MUST_USE bool unaryArithTrySpecialized(bool* emitted, JSOp op, MDefinition* value);
+    MOZ_MUST_USE bool unaryArithTrySpecializedOnBaselineInspector(bool* emitted, JSOp op,
+                                                                  MDefinition* value);
 
     // jsop_pow helpers.
     MOZ_MUST_USE bool powTrySpecialized(bool* emitted, MDefinition* base, MDefinition* power,
@@ -692,6 +703,8 @@ class IonBuilder
     MOZ_MUST_USE bool jsop_pow();
     MOZ_MUST_USE bool jsop_pos();
     MOZ_MUST_USE bool jsop_neg();
+    MOZ_MUST_USE bool jsop_tonumeric();
+    MOZ_MUST_USE bool jsop_inc_or_dec(JSOp op);
     MOZ_MUST_USE bool jsop_tostring();
     MOZ_MUST_USE bool jsop_setarg(uint32_t arg);
     MOZ_MUST_USE bool jsop_defvar(uint32_t index);
@@ -913,52 +926,6 @@ class IonBuilder
     InliningStatus inlineObjectIsTypeDescr(CallInfo& callInfo);
     InliningStatus inlineSetTypedObjectOffset(CallInfo& callInfo);
     InliningStatus inlineConstructTypedObject(CallInfo& callInfo, TypeDescr* target);
-
-    // SIMD intrinsics and natives.
-    InliningStatus inlineConstructSimdObject(CallInfo& callInfo, SimdTypeDescr* target);
-
-    // SIMD helpers.
-    bool canInlineSimd(CallInfo& callInfo, JSNative native, unsigned numArgs,
-                       InlineTypedObject** templateObj);
-    MDefinition* unboxSimd(MDefinition* ins, SimdType type);
-    IonBuilder::InliningStatus boxSimd(CallInfo& callInfo, MDefinition* ins,
-                                       InlineTypedObject* templateObj);
-    MDefinition* convertToBooleanSimdLane(MDefinition* scalar);
-
-    InliningStatus inlineSimd(CallInfo& callInfo, JSFunction* target, SimdType type);
-
-    InliningStatus inlineSimdBinaryArith(CallInfo& callInfo, JSNative native,
-                                         MSimdBinaryArith::Operation op, SimdType type);
-    InliningStatus inlineSimdBinaryBitwise(CallInfo& callInfo, JSNative native,
-                                           MSimdBinaryBitwise::Operation op, SimdType type);
-    InliningStatus inlineSimdBinarySaturating(CallInfo& callInfo, JSNative native,
-                                              MSimdBinarySaturating::Operation op, SimdType type);
-    InliningStatus inlineSimdShift(CallInfo& callInfo, JSNative native, MSimdShift::Operation op,
-                                   SimdType type);
-    InliningStatus inlineSimdComp(CallInfo& callInfo, JSNative native,
-                                  MSimdBinaryComp::Operation op, SimdType type);
-    InliningStatus inlineSimdUnary(CallInfo& callInfo, JSNative native,
-                                   MSimdUnaryArith::Operation op, SimdType type);
-    InliningStatus inlineSimdExtractLane(CallInfo& callInfo, JSNative native, SimdType type);
-    InliningStatus inlineSimdReplaceLane(CallInfo& callInfo, JSNative native, SimdType type);
-    InliningStatus inlineSimdSplat(CallInfo& callInfo, JSNative native, SimdType type);
-    InliningStatus inlineSimdShuffle(CallInfo& callInfo, JSNative native, SimdType type,
-                                     unsigned numVectors);
-    InliningStatus inlineSimdCheck(CallInfo& callInfo, JSNative native, SimdType type);
-    InliningStatus inlineSimdConvert(CallInfo& callInfo, JSNative native, bool isCast,
-                                     SimdType from, SimdType to);
-    InliningStatus inlineSimdSelect(CallInfo& callInfo, JSNative native, SimdType type);
-
-    MOZ_MUST_USE bool prepareForSimdLoadStore(CallInfo& callInfo, Scalar::Type simdType,
-                                              MInstruction** elements, MDefinition** index,
-                                              Scalar::Type* arrayType);
-    InliningStatus inlineSimdLoad(CallInfo& callInfo, JSNative native, SimdType type,
-                                  unsigned numElems);
-    InliningStatus inlineSimdStore(CallInfo& callInfo, JSNative native, SimdType type,
-                                   unsigned numElems);
-
-    InliningStatus inlineSimdAnyAllTrue(CallInfo& callInfo, bool IsAllTrue, JSNative native,
-                                        SimdType type);
 
     // Utility intrinsics.
     InliningStatus inlineIsCallable(CallInfo& callInfo);
