@@ -5,6 +5,7 @@
 
 #include "D3D11YCbCrImage.h"
 #include "YCbCrUtils.h"
+#include "gfx2DGlue.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/layers/CompositableClient.h"
 #include "mozilla/layers/CompositableForwarder.h"
