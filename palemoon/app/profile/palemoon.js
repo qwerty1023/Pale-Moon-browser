@@ -1213,7 +1213,7 @@ pref("status4evar.addonbar.closeButton", false);
 pref("status4evar.addonbar.legacyShim", true);
 pref("status4evar.addonbar.windowGripper", true);
 
-pref("status4evar.advanced.status.detectFullScreen", false);
+pref("status4evar.advanced.status.detectFullScreen", true);
 pref("status4evar.advanced.status.detectVideo", true);
 
 pref("status4evar.download.button.action", 1);

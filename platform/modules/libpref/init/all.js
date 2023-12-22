@@ -1,4 +1,4 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+﻿/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1197,7 +1197,7 @@ pref("dom.webapps.useCurrentProfile", false);
 // Use incremental cycle collection?
 // In practice this gave a noticeable performance hit. Default off.
 // See forum topic https://forum.palemoon.org/viewtopic.php?f=62&t=29887
-pref("dom.cycle_collector.incremental", false);
+pref("dom.cycle_collector.incremental", true);
 
 // Parsing perf prefs. For now just mimic what the old code did.
 #ifndef XP_WIN
