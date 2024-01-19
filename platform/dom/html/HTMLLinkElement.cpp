@@ -531,8 +531,7 @@ HTMLLinkElement::GetStyleSheetInfo(nsAString& aTitle,
 
   nsAutoString rel;
   GetAttr(kNameSpaceID_None, nsGkAtoms::rel, rel);
-  uint32_t linkTypes =
-    nsStyleLinkElement::ParseLinkTypes(rel, NodePrincipal());
+  uint32_t linkTypes = nsStyleLinkElement::ParseLinkTypes(rel, NodePrincipal());
   // Is it a stylesheet link?
   if (linkTypes & nsStyleLinkElement::ePRELOAD) {
     nsAutoString preloadType;
