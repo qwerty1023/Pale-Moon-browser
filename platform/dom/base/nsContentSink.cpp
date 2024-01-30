@@ -48,6 +48,7 @@
 #include "nsIObserverService.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/ScriptLoader.h"
+#include "mozilla/dom/Link.h"
 #include "nsParserConstants.h"
 #include "nsSandboxFlags.h"
 
@@ -471,7 +472,7 @@ nsContentSink::ProcessLinkHeader(const nsAString& aLinkData)
   nsAutoString media;
   nsAutoString anchor;
   nsAutoString crossOrigin;
-  nsAutoString preloadType;
+  nsAutoString destination;
 
   crossOrigin.SetIsVoid(true);
 
@@ -655,9 +656,9 @@ nsContentSink::ProcessLinkHeader(const nsAString& aLinkData)
               crossOrigin.StripWhitespace();
             }
           } else if (attr.LowerCaseEqualsLiteral("as")) {
-            if (preloadType.IsEmpty()) {
-              preloadType = value;
-              preloadType.StripWhitespace();
+            if (destination.IsEmpty()) {
+              destination = value;
+              destination.StripWhitespace();
             }
           }
         }
@@ -672,7 +673,7 @@ nsContentSink::ProcessLinkHeader(const nsAString& aLinkData)
         rv = ProcessLink(anchor, href, rel,
                          // prefer RFC 5987 variant over non-I18zed version
                          titleStar.IsEmpty() ? title : titleStar,
-                         type, media, crossOrigin, preloadType);
+                         type, media, crossOrigin, destination);
       }
 
       href.Truncate();
@@ -682,7 +683,7 @@ nsContentSink::ProcessLinkHeader(const nsAString& aLinkData)
       media.Truncate();
       anchor.Truncate();
       crossOrigin.SetIsVoid(true);
-      preloadType.Truncate();
+      destination.Truncate();
       
       seenParameters = false;
     }
@@ -695,7 +696,7 @@ nsContentSink::ProcessLinkHeader(const nsAString& aLinkData)
     rv = ProcessLink(anchor, href, rel,
                      // prefer RFC 5987 variant over non-I18zed version
                      titleStar.IsEmpty() ? title : titleStar,
-                     type, media, crossOrigin, preloadType);
+                     type, media, crossOrigin, destination);
   }
 
   return rv;
@@ -707,7 +708,7 @@ nsContentSink::ProcessLink(const nsSubstring& aAnchor, const nsSubstring& aHref,
                            const nsSubstring& aRel, const nsSubstring& aTitle,
                            const nsSubstring& aType, const nsSubstring& aMedia,
                            const nsSubstring& aCrossOrigin,
-                           const nsSubstring& aPreloadType)
+                           const nsSubstring& aDestination)
 {
   uint32_t linkTypes =
     nsStyleLinkElement::ParseLinkTypes(aRel, mDocument->NodePrincipal());
@@ -724,25 +725,25 @@ nsContentSink::ProcessLink(const nsSubstring& aAnchor, const nsSubstring& aHref,
     return NS_OK;
   }
 
-  bool hasPrefetch = linkTypes & nsStyleLinkElement::ePREFETCH;
   // prefetch href if relation is "next" or "prefetch"
-  if (hasPrefetch || (linkTypes & nsStyleLinkElement::eNEXT)) {
-    PrefetchHref(aHref, mDocument, hasPrefetch);
+  if ((linkTypes & nsStyleLinkElement::eNEXT) ||
+      (linkTypes & nsStyleLinkElement::ePREFETCH) ||
+      (linkTypes & nsStyleLinkElement::ePRELOAD)) {
+    PrefetchOrPreloadHref(aHref, mDocument, linkTypes, aDestination, aType, aMedia);
   }
 
-  if (!aHref.IsEmpty() && (linkTypes & nsStyleLinkElement::eDNS_PREFETCH)) {
-    PrefetchDNS(aHref);
-  }
+  if (!aHref.IsEmpty()) {
+    if (linkTypes & nsStyleLinkElement::eDNS_PREFETCH) {
+      PrefetchDNS(aHref);
+    }
 
-  if (!aHref.IsEmpty() && (linkTypes & nsStyleLinkElement::ePRECONNECT)) {
-    Preconnect(aHref, aCrossOrigin);
+    if (linkTypes & nsStyleLinkElement::ePRECONNECT) {
+      Preconnect(aHref, aCrossOrigin);
+    }
   }
 
   // is it a stylesheet link?
-  if ((linkTypes & nsStyleLinkElement::ePRELOAD) &&
-      aPreloadType.LowerCaseEqualsLiteral("style")) {
-    // We are preloading a stylesheet link.
-  } else if (!(linkTypes & nsStyleLinkElement::eSTYLESHEET)) {
+  if (!(linkTypes & nsStyleLinkElement::eSTYLESHEET)) {
     return NS_OK;
   }
 
@@ -858,9 +859,12 @@ nsContentSink::ProcessMETATag(nsIContent* aContent)
 
 
 void
-nsContentSink::PrefetchHref(const nsAString &aHref,
-                            nsINode *aSource,
-                            bool aExplicit)
+nsContentSink::PrefetchOrPreloadHref(const nsAString &aHref,
+                                     nsINode *aSource,
+                                     uint32_t aLinkTypes,
+                                     const nsAString& aDestination,
+                                     const nsAString& aType,
+                                     const nsAString& aMedia)
 {
   nsCOMPtr<nsIPrefetchService> prefetchService(do_GetService(NS_PREFETCHSERVICE_CONTRACTID));
   if (prefetchService) {
@@ -872,7 +876,25 @@ nsContentSink::PrefetchHref(const nsAString &aHref,
               mDocument->GetDocBaseURI());
     if (uri) {
       nsCOMPtr<nsIDOMNode> domNode = do_QueryInterface(aSource);
-      prefetchService->PrefetchURI(uri, mDocumentURI, domNode, aExplicit);
+      if (aLinkTypes & nsStyleLinkElement::ePRELOAD) {
+        nsContentPolicyType policyType;
+        bool isPreloadValid = Link::CheckPreloadAttrs(policyType,
+                                                      aDestination,
+                                                      aType,
+                                                      aMedia,
+                                                      mDocument);
+        if (!isPreloadValid) {
+          // XXX: WPTs expect that we timeout on invalid preloads including
+          // those with valid destinations instead of firing an error event.
+          return;
+        }
+        nsContentUtils::DispatchEventForPreloadURI(domNode, policyType);
+      } else {
+        prefetchService->PrefetchURI(uri,
+                                     mDocumentURI,
+                                     domNode,
+                                     aLinkTypes & nsStyleLinkElement::ePREFETCH);
+      }
     }
   }
 }

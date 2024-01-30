@@ -230,13 +230,13 @@ nsHtml5TreeBuilder::createElement(int32_t aNamespace,
                 mSpeculativeLoadQueue.AppendElement()->InitPreconnect(
                   url, crossOrigin);
               }
-            } else if (rel.LowerCaseEqualsASCII("preload")) {
+            } else if (rel.LowerCaseEqualsASCII("preload") && nsContentUtils::IsPreloadEnabled()) {
               nsHtml5String url =
                 aAttributes->getValue(nsHtml5AttributeName::ATTR_HREF);
               if (url) {
-                nsHtml5String as =
+                nsHtml5String preloadAs =
                   aAttributes->getValue(nsHtml5AttributeName::ATTR_AS);
-                if (as.LowerCaseEqualsASCII("script")) {
+                if (preloadAs.LowerCaseEqualsASCII("script")) {
                   nsHtml5String charset =
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_CHARSET);
                   nsHtml5String type =
@@ -245,12 +245,6 @@ nsHtml5TreeBuilder::createElement(int32_t aNamespace,
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_CROSSORIGIN);
                   nsHtml5String integrity =
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_INTEGRITY);
-                  bool async =
-                    aAttributes->contains(nsHtml5AttributeName::ATTR_ASYNC);
-                  bool defer =
-                    aAttributes->contains(nsHtml5AttributeName::ATTR_DEFER);
-                  bool noModule =
-                    aAttributes->contains(nsHtml5AttributeName::ATTR_NOMODULE);
                   mSpeculativeLoadQueue.AppendElement()->InitScript(
                     url,
                     charset,
@@ -258,11 +252,11 @@ nsHtml5TreeBuilder::createElement(int32_t aNamespace,
                     crossOrigin,
                     integrity,
                     mode == nsHtml5TreeBuilder::IN_HEAD,
-                    async,
-                    defer,
-                    noModule);
-                  mCurrentHtmlScriptIsAsyncOrDefer = async || defer;
-                } else if (as.LowerCaseEqualsASCII("style")) {
+                    false,
+                    false,
+                    false);
+                  mCurrentHtmlScriptIsAsyncOrDefer = false;
+                } else if (preloadAs.LowerCaseEqualsASCII("style")) {
                   nsHtml5String charset =
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_CHARSET);
                   nsHtml5String crossOrigin =
@@ -271,10 +265,7 @@ nsHtml5TreeBuilder::createElement(int32_t aNamespace,
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_INTEGRITY);
                   mSpeculativeLoadQueue.AppendElement()->InitStyle(
                     url, charset, crossOrigin, integrity);
-                } else if (as.LowerCaseEqualsASCII("video")) {
-                  mSpeculativeLoadQueue.AppendElement()->InitImage(
-                    url, nullptr, nullptr, nullptr, nullptr);
-                } else if (as.LowerCaseEqualsASCII("image")) {
+                } else if (preloadAs.LowerCaseEqualsASCII("image")) {
                   nsHtml5String srcset =
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_SRCSET);
                   nsHtml5String crossOrigin =

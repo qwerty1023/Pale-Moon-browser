@@ -176,7 +176,7 @@ HTMLLinkElement::BindToTree(nsIDocument* aDocument,
 
   if (nsIDocument* doc = GetComposedDoc()) {
     doc->RegisterPendingLinkUpdate(this);
-    TryDNSPrefetchPreconnectOrPrefetch();
+    TrySpeculativeLoadFeature();
   }
 
   void (HTMLLinkElement::*update)() = &HTMLLinkElement::UpdateStyleSheetInternal;
@@ -243,7 +243,7 @@ HTMLLinkElement::ParseAttribute(int32_t aNamespaceID,
     }
 
     if (aAttribute == nsGkAtoms::as) {
-      aResult.ParseStringOrAtom(aValue);
+      ParseDestinationValue(aValue, aResult);
       return true;
     }
 
@@ -399,9 +399,17 @@ HTMLLinkElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
         UpdateImport();
       }
 
-      if ((aName == nsGkAtoms::rel || aName == nsGkAtoms::href) &&
-          IsInComposedDoc()) {
-        TryDNSPrefetchPreconnectOrPrefetch();
+      if (IsInComposedDoc()) {
+        if (aName == nsGkAtoms::rel || aName == nsGkAtoms::href) {
+          TrySpeculativeLoadFeature();
+        }
+
+        if (aName == nsGkAtoms::as ||
+            aName == nsGkAtoms::type ||
+            aName == nsGkAtoms::crossorigin ||
+            aName == nsGkAtoms::media) {
+          UpdatePreload(aName, aValue, aOldValue);
+        }
       }
 
       UpdateStyleSheetInternal(nullptr, nullptr,
@@ -427,6 +435,13 @@ HTMLLinkElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
           aName == nsGkAtoms::type ||
           (LINK_DISABLED && aName == nsGkAtoms::disabled)) {
         UpdateStyleSheetInternal(nullptr, nullptr, true);
+      }
+      if ((aName == nsGkAtoms::as ||
+           aName == nsGkAtoms::type ||
+           aName == nsGkAtoms::crossorigin ||
+           aName == nsGkAtoms::media) &&
+          IsInComposedDoc()) {
+        UpdatePreload(aName, aValue, aOldValue);
       }
       if (aName == nsGkAtoms::href ||
           aName == nsGkAtoms::rel) {
@@ -531,16 +546,10 @@ HTMLLinkElement::GetStyleSheetInfo(nsAString& aTitle,
 
   nsAutoString rel;
   GetAttr(kNameSpaceID_None, nsGkAtoms::rel, rel);
-  uint32_t linkTypes = nsStyleLinkElement::ParseLinkTypes(rel, NodePrincipal());
+  uint32_t linkTypes =
+    nsStyleLinkElement::ParseLinkTypes(rel, NodePrincipal());
   // Is it a stylesheet link?
-  if (linkTypes & nsStyleLinkElement::ePRELOAD) {
-    nsAutoString preloadType;
-    GetAttr(kNameSpaceID_None, nsGkAtoms::as, preloadType);
-    preloadType.CompressWhitespace();
-    if (!preloadType.LowerCaseEqualsLiteral("style")) {
-      return;
-    }
-  } else if (!(linkTypes & nsStyleLinkElement::eSTYLESHEET)) {
+  if (!(linkTypes & nsStyleLinkElement::eSTYLESHEET)) {
     return;
   }
 
