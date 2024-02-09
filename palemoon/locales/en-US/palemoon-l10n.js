@@ -9,6 +9,5 @@ pref("browser.tabs.closeButtons", 3);
 pref("extensions.blocklist.enabled", false);
 pref("media.webm.enabled", false);
 pref("browser.tabs.showAudioPlayingIcon", false);
-pref("browser.tabs.insertRelatedAfterCurrent", false);
 pref("gfx.direct2d.force-enabled", true);
 pref("media.hardware-video-decoding.force-enabled", true);
