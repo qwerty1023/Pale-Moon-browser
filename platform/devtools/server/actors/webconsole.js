@@ -309,7 +309,11 @@ WebConsoleActor.prototype =
   actorPrefix: "console",
 
   get globalDebugObject() {
-    return this.parentActor.threadActor.globalDebugObject;
+    //S:x240323: return this.parentActor.threadActor.globalDebugObject;
+    //S:New240323 - avoid problems if scratchpad executes in Browser Context:
+    let pa=this.parentActor, ta=pa?pa.threadActor:null;
+    return ta?ta.globalDebugObject:null;
+    //
   },
 
   grip: function WCA_grip()
@@ -1070,6 +1074,27 @@ WebConsoleActor.prototype =
     CONSOLE_WORKER_IDS.forEach((aId) => {
       ConsoleAPIStorage.clearEvents(aId);
     });
+    
+    //S:New240325 - Web Console clear button should clear NetworkEventActor items from its NetworkMonitor ...
+    // not sure about other actors in that pool...
+    if (this._actorPool && this.networkMonitor) {
+      let A = [], actor, acts = this._actorPool._actors, aid, n;
+      let voidActor={actorID:0,release:function(){},stub:true};
+      for(n in acts)if(n.indexOf('netEvent')>=0)A.push(acts[n]);
+      for(actor of A)if(actor){
+        aid = actor.actorID;
+        if(actor.release)actor.release();
+        // sometimes the actors are not removed, possibly because of scratchpad inspector visited them ???
+        // or because there are thousands of them and "delete" operator has some bug in such case ?
+        // in such case, plain delete does not work, not sure why...
+        if(aid && acts[aid]){
+          acts[aid]=voidActor;
+          delete acts[aid];
+        }
+      }
+      if(this.networkMonitor.onConsoleClear) this.networkMonitor.onConsoleClear();
+    }
+    //
 
     if (this.parentActor.isRootActor) {
       Services.console.logStringMessage(null); // for the Error Console
