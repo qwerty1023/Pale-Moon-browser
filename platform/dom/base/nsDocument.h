@@ -56,7 +56,6 @@
 #include "imgIRequest.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStates.h"
-#include "mozilla/FunctionRef.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/PendingAnimationTracker.h"
 #include "mozilla/dom/DOMImplementation.h"
@@ -78,7 +77,6 @@
 #define XML_DECLARATION_BITS_STANDALONE_EXISTS    (1 << 2)
 #define XML_DECLARATION_BITS_STANDALONE_YES       (1 << 3)
 
-using namespace mozilla;
 
 class nsDOMStyleSheetSetList;
 class nsDocument;
@@ -640,7 +638,7 @@ public:
   using mozilla::dom::DocumentOrShadowRoot::GetElementsByTagName;
   using mozilla::dom::DocumentOrShadowRoot::GetElementsByTagNameNS;
   using mozilla::dom::DocumentOrShadowRoot::GetElementsByClassName;
-  
+
   // nsIDOMEventTarget
   virtual nsresult GetEventTargetParent(
                      mozilla::EventChainPreVisitor& aVisitor) override;
@@ -853,7 +851,7 @@ public:
 
   virtual Element* FindImageMap(const nsAString& aNormalizedMapName) override;
 
-  virtual nsTArray<Element*> GetTopLayer() const override;
+  virtual nsTArray<Element*> GetFullscreenStack() const override;
   virtual void AsyncRequestFullScreen(
     mozilla::UniquePtr<FullscreenRequest>&& aRequest) override;
   virtual void RestorePreviousFullScreenState() override;
@@ -863,7 +861,6 @@ public:
 
   virtual nsresult RemoteFrameFullscreenReverted() override;
   virtual nsIDocument* GetFullscreenRoot() override;
-  virtual size_t CountFullscreenElements() const override;
   virtual void SetFullscreenRoot(nsIDocument* aRoot) override;
 
   // Returns the size of the mBlockedTrackingNodes array. (nsIDocument.h)
@@ -900,29 +897,23 @@ public:
   // to move this document into full-screen mode if allowed.
   void RequestFullScreen(mozilla::UniquePtr<FullscreenRequest>&& aRequest);
 
-  // Removes all elements with the full-screen flag set from the top layer, and
-  // clears their full-screen flag.
+  // Removes all elements from the full-screen stack, removing full-scren
+  // styles from the top element in the stack.
   void CleanupFullscreenState();
 
-  // Pushes aElement onto the top layer
-  bool TopLayerPush(Element* aElement);
+  // Pushes aElement onto the full-screen stack, and removes full-screen styles
+  // from the former full-screen stack top, and its ancestors, and applies the
+  // styles to aElement. aElement becomes the new "full-screen element".
+  bool FullScreenStackPush(Element* aElement);
 
-  // Removes the topmost element which have aPredicate return true from the top
-  // layer. The removed element, if any, is returned.
-  Element* TopLayerPop(FunctionRef<bool(Element*)> aPredicateFunc);
-
-  // Pops the fullscreen element from the top layer and clears its
-  // fullscreen flag.
-  void UnsetFullscreenElement();
-
-  // Pushes the given element into the top of top layer and set fullscreen
-  // flag.
-  bool SetFullscreenElement(Element* aElement);
+  // Remove the top element from the full-screen stack. Removes the full-screen
+  // styles from the former top element, and applies them to the new top
+  // element, if there is one.
+  void FullScreenStackPop();
 
   // Returns the top element from the full-screen stack.
-  Element* GetTopLayerTop() override;
-  // Return the fullscreen element in the top layer
-  Element* GetUnretargetedFullScreenElement() override;
+  Element* FullScreenStackTop() override;
+
   // DOM-exposed fullscreen API
   bool FullscreenEnabled() override;
 
@@ -1199,8 +1190,10 @@ protected:
   // is a weak reference to avoid leaks due to circular references.
   nsWeakPtr mScopeObject;
 
-  // Stack of top layer elements.
-  nsTArray<nsWeakPtr> mTopLayer;
+  // Stack of full-screen elements. When we request full-screen we push the
+  // full-screen element onto this stack, and when we cancel full-screen we
+  // pop one off this stack, restoring the previous full-screen state
+  nsTArray<nsWeakPtr> mFullScreenStack;
 
   // The root of the doc tree in which this document is in. This is only
   // non-null when this document is in fullscreen mode.
