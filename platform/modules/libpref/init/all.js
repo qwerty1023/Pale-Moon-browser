@@ -1,4 +1,4 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
+﻿/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -5007,7 +5007,7 @@ pref("narrate.filter-voices", true);
 pref("dom.audiochannel.mutedByDefault", false);
 
 // HTML <dialog> element
-pref("dom.dialog_element.enabled", false);
+pref("dom.dialog_element.enabled", true);
 
 // Enable <details> and <summary> tags.
 pref("dom.details_element.enabled", true);
