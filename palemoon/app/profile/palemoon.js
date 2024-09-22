@@ -516,6 +516,12 @@ pref("javascript.options.showInConsole",          true);
 pref("general.warnOnAboutConfig",                 false);
 #endif
 
+// Enable unlinking of ghost windows so they can be garbage collected.
+pref("browser.ghostbuster.enabled",               true);
+// Disable GC on memory pressure, avoid incessant recycling when websites
+// misbehave. Should also avoid spurious GCs during ghostbusting.
+pref("javascript.options.gc_on_memory_pressure",  false);
+
 // This is the pref to control the location bar, change this to true to 
 // force this - this makes the origin of popup windows more obvious to avoid
 // spoofing. We would rather not do it by default because it affects UE for web
@@ -668,7 +674,7 @@ pref("browser.xul.error_pages.expert_bad_cert", false);
 // Work Offline is best manually managed by the user.
 pref("network.manage-offline-status", false);
 
-// We want to make sure mail URLs are handled externally...
+// We want to make sure known external protocol URLs are handled externally.
 pref("network.protocol-handler.external.mailto", true); // for mail
 pref("network.protocol-handler.external.news", true);   // for news
 pref("network.protocol-handler.external.snews", true);  // for secure news
@@ -677,11 +683,11 @@ pref("network.protocol-handler.external.nntp", true);   // also news
 pref("network.protocol-handler.external.ms-windows-store", true);
 #endif
 
-// ...without warning dialogs
+// Configure external handler warning dialogs.
 pref("network.protocol-handler.warn-external.mailto", false);
-pref("network.protocol-handler.warn-external.news", false);
-pref("network.protocol-handler.warn-external.snews", false);
-pref("network.protocol-handler.warn-external.nntp", false);
+pref("network.protocol-handler.warn-external.news", true);
+pref("network.protocol-handler.warn-external.snews", true);
+pref("network.protocol-handler.warn-external.nntp", true);
 #ifdef XP_WIN
 pref("network.protocol-handler.warn-external.ms-windows-store", false);
 #endif
