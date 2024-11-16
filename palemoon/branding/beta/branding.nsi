@@ -7,4 +7,4 @@
 !define URLInfoAbout          "http://www.palemoon.org/"
 !define URLUpdateInfo         "http://www.palemoon.org/releasenotes.shtml"
 !define HelpLink              "https://forum.palemoon.org/viewforum.php?f=24"
-!define URLSystemRequirements "http://www.palemoon.org/download.shtml"
+!define URLSystemRequirements "http://www.palemoon.org/systemrequirements.shtml"

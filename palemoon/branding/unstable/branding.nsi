@@ -7,4 +7,4 @@
 !define URLInfoAbout          "http://www.palemoon.org/"
 !define URLUpdateInfo         "http://www.palemoon.org/unstable/"
 !define HelpLink              "http://www.palemoon.org/unstable/"
-!define URLSystemRequirements "http://www.palemoon.org/download.shtml"
+!define URLSystemRequirements "http://www.palemoon.org/systemrequirements.shtml"
