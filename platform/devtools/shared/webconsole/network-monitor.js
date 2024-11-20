@@ -174,77 +174,6 @@ ChannelEventSinkFactory.getService = function () {
   return Cc[SINK_CONTRACT_ID].getService(Ci.nsIChannelEventSink).wrappedJSObject;
 };
 
-//S:New240324 - share same item objects for multiple identical occurences:
-function StackFrameItem(item){
-  // item == {filename,lineNumber,columnNumber,functionName,asyncCause}
-  let stg = StackFrameItem, key = stg.hashItem(item);
-  let map = stg.map || (stg.map = new Map()), fmap;
-  let citem = map.get(key), arr,i,c;
-  if(citem){
-    // has cached item ~ array...
-    if(c=citem.length){
-      // already array
-      arr=citem;
-      //for(citem of arr)if(stg.isSame(item,citem))return citem.used=stg.getSerial(),citem;
-      for(i=c-1;i>=0;i--)if(citem=arr[i])if(stg.isSame(item,citem))return citem.used=stg.getSerial(),citem;
-    }else{
-      if(stg.isSame(item,citem))return citem.used=stg.getSerial(),citem;
-      // make array
-      arr = [citem];
-      map.set(key,arr);
-    }
-  }else{
-    if(map.size>=1024)stg.sweepCache(128);
-  }
-  if(item.filename){
-    fmap = stg.fmap || (stg.fmap = new Map());
-    if(citem=fmap.get(item.filename))item.filename=citem;
-    else{
-      if(fmap.size>=1024)fmap.clear();
-      fmap.set(citem=item.filename,citem);
-    }
-  }
-  //
-  if(arr)arr.push(item);
-  else map.set(key,item);
-  Object.defineProperty(item,'used',stg.Desc(stg.getSerial(),false));
-  //
-  return item;
-}
-StackFrameItem.Desc=function(value,isEnum){
-  let dsc = StackFrameItem.dsc || (StackFrameItem.dsc = {value:null,enumerable:!0,writable:!0,configurable:!0});
-  dsc.value = value;
-  dsc.enumerable = isEnum;
-  return dsc;
-};
-StackFrameItem._Serial=0;
-StackFrameItem.getSerial=function(){return ++this._Serial};
-StackFrameItem.isSame = function(it1,it2){
-  return (it1.columnNumber==it2.columnNumber) && (it1.lineNumber==it2.lineNumber) && (it1.filename==it2.filename) && (it1.functionName==it2.functionName) && (it1.asyncCause==it2.asyncCause);
-};
-StackFrameItem.hashItem = function(item){
-  // from immutable.js , just hashing multiple strings together...
-  var i,hash = 0,s = item.filename;
-  if(s)for(i = 0; i < s.length; i++)hash = 31 * hash + s.charCodeAt(i) | 0;
-  if(s=item.functionName)for(i = 0; i < s.length; i++)hash = 31 * hash + s.charCodeAt(i) | 0;
-  if(s=item.asyncCause)for(i = 0; i < s.length; i++)hash = 31 * hash + s.charCodeAt(i) | 0;
-  hash = hash * 31 + ((item.lineNumber||1) * (item.columnNumber||1)) | 0;
-  // function smi(i32){ return ((i32>>>1)&0x40000000) | (i32&0xbfffffff) }
-  return ((hash>>>1)&0x40000000) | (hash&0xbfffffff);
-}
-StackFrameItem.sweepCache = function(maxCount){
-  if(!this.map)return false;
-  if(maxCount<=0) return this.map.clear();
-  var pair,item,map=this.map,A=[],n=maxCount;
-  for(pair of map)if(!pair[1].length)A.push(pair);
-  A.sort(function(a,b){return b[1].used-a[1].used});
-  map.clear();
-  for(pair of A)if(n-->0)map.set(pair[0],pair[1]);else break;
-};
-//JSON.stringify(StackFrameItem({filename: 'test',lineNumber: 1,columnNumber: 2,functionName: 'test1',asyncCause: null}))
-//
-
-
 function StackTraceCollector(filters) {
   this.filters = filters;
   this.stacktracesById = new Map();
@@ -279,13 +208,13 @@ StackTraceCollector.prototype = {
     if (frame && frame.caller) {
       frame = frame.caller;
       while (frame) {
-        stacktrace.push(StackFrameItem({ //S:New240324 +StackFrameItem
+        stacktrace.push({
           filename: frame.filename,
           lineNumber: frame.lineNumber,
           columnNumber: frame.columnNumber,
           functionName: frame.name,
           asyncCause: frame.asyncCause,
-        }));
+        });
         frame = frame.caller || frame.asyncCaller;
       }
     }
@@ -857,43 +786,7 @@ NetworkMonitor.prototype = {
     // everything else only happens in the parent process
     Services.obs.addObserver(this._serviceWorkerRequest,
                              "service-worker-synthesized-response", false);
-    
-    //S:New240319 - other options in sub-object, so that Services.prefs does not hold reference to NetworkMonitor ...?
-    let extOptions = this.extOptions = {
-      Prefs: "devtools.browserconsole.filter.", // where should this be ?
-      //
-      avoidHeaders: false,
-      //
-      prefBranch: null,
-      observe: function(aSubject, aTopic, aData) {
-        if (aTopic != "nsPref:changed") return;
-        switch(aData) {
-          case "httpheaders": {
-            this.avoidHeaders = !aSubject.getBoolPref(aData, true);
-            break;
-          }
-        }
-      },
-      destroy: function() {
-        if (this.prefBranch) {
-          this.prefBranch.removeObserver("", this);
-          this.prefBranch = null;
-        }
-      }
-    };
-    //
-    let defBranch = Services.prefs.getDefaultBranch(extOptions.Prefs);
-    if(!defBranch.getPrefType("httpheaders")) defBranch.setBoolPref("httpheaders", true);
-    defBranch = null;
-    //
-    //extOptions.avoidHeaders = !Services.prefs.getBoolPref(extOptions.Prefs + "httpheaders", true); // this also works...
-    extOptions.prefBranch = Services.prefs.getBranch(extOptions.Prefs);
-    extOptions.avoidHeaders = !extOptions.prefBranch.getBoolPref("httpheaders", true);
-    extOptions.prefBranch.addObserver("", extOptions, false);
-    extOptions = null;
-    //
   },
-  extOptions: null, //S:New240319
 
   get throttleData() {
     return this._throttleData;
@@ -963,32 +856,17 @@ NetworkMonitor.prototype = {
     };
 
     let setCookieHeader = null;
-    
-    let hdrCache = this.getHdrCache(); //S:New240324
-    //S:moved240326
-    let avoidHeaders = this.extOptions && this.extOptions.avoidHeaders && !this.saveRequestAndResponseBodies;
-    //
-    
+
     channel.visitResponseHeaders({
       visitHeader: function (name, value) {
         let lowerName = name.toLowerCase();
         if (lowerName == "set-cookie") {
           setCookieHeader = value;
         }
-        //S:x240324: response.headers.push({ name: name, value: value });
-        //S:New240324,Mod240326:
-        response.headers.push(avoidHeaders ? {} : hdrCache.HttpHeader(name,value));
-        //
+        response.headers.push({ name: name, value: value });
       }
     });
 
-    //S:New240319
-    if(avoidHeaders && response.headers.length){
-      //response.headers.forEach(function(H){ H.name = H.value = null; });
-      response.headers = [{name: "Headers", value: "Discarded.."}];
-    }
-    //
-    
     if (!response.headers.length) {
       // No need to continue.
       return;
@@ -1232,54 +1110,25 @@ NetworkMonitor.prototype = {
     let headers = [];
     let cookies = [];
     let cookieHeader = null;
-    
-    let hdrCache = this.getHdrCache(); //S:New240324
-    //S:moved240326
-    let avoidHeaders = this.extOptions && this.extOptions.avoidHeaders && !this.saveRequestAndResponseBodies;
-    //
-    
+
     // Copy the request header data.
     channel.visitRequestHeaders({
       visitHeader: function (name, value) {
         if (name == "Cookie") {
           cookieHeader = value;
         }
-        //S:x240324: headers.push({ name: name, value: value });
-        //S:New240324,Mod240326
-        headers.push(avoidHeaders ? {} : hdrCache.HttpHeader(name,value));
-        //
+        headers.push({ name: name, value: value });
       }
     });
 
-    //S:New240318 - may this variable stay somewhere ?
-    //???cookieHeader = null;
-    if (avoidHeaders) {
-      extraStringData = '';
-      if (headers.length) {
-        //headers.forEach(function(H){ H.name = H.value = null; });
-        headers = [{ name: "Headers", value: "Discarded." }];
-      }
-      if (cookieHeader) {
-        cookieHeader = "Cookies=Discarded";
-      }
-    }else
-    if(!this.saveRequestAndResponseBodies){
-      // in Browser Console, raw headers are not displayed, only har-collector needs them...
-      if(extraStringData)extraStringData = '(Discarded)';
-    }
-    //
-    
     if (cookieHeader) {
       cookies = NetworkHelper.parseCookieHeader(cookieHeader);
-      //S:New240324
-      this.getCookieCache().cacheCookies(cookies);
-      //
     }
-    
+
     httpActivity.owner = this.owner.onNetworkEvent(event);
 
     this._setupResponseListener(httpActivity, fromCache);
-    
+
     httpActivity.owner.addRequestHeaders(headers, extraStringData);
     httpActivity.owner.addRequestCookies(cookies);
 
@@ -1502,18 +1351,7 @@ NetworkMonitor.prototype = {
     response.headersSize = extraStringData.length;
 
     httpActivity.responseStatus = response.status;
-    
-    //S:New240319 - I haven't seen where this occurs:
-    let avoidHeaders = this.extOptions && this.extOptions.avoidHeaders && !this.saveRequestAndResponseBodies;
-    if (avoidHeaders) {
-      extraStringData = statusLine + "\r\nHeaders: Discarded...";
-    }else
-    if(!this.saveRequestAndResponseBodies){
-      // in Browser Console, raw headers are not displayed, only har-collector needs them...
-      if(extraStringData)extraStringData = '(Discarded)';
-    }
-    //
-    
+
     // Discard the response body for known response statuses.
     switch (parseInt(response.status, 10)) {
       case HTTP_MOVED_PERMANENTLY:
@@ -1689,11 +1527,7 @@ NetworkMonitor.prototype = {
 
     Services.obs.removeObserver(this._serviceWorkerRequest,
                                 "service-worker-synthesized-response");
-    
-    //S:New240320
-    if(this.extOptions) this.extOptions.destroy();
-    //
-    
+
     this.interceptedChannels.clear();
     this.openRequests = {};
     this.openResponses = {};
@@ -1701,127 +1535,7 @@ NetworkMonitor.prototype = {
     this.filters = null;
     this._throttler = null;
   },
-  
-  //S:New240324
-  /**
-   * hdrCache caches same HttpHeader objects, many are repeating often...
-   */
-  getHdrCache: function() {
-    return this.hdrCache || (this.hdrCache = new HttpHeaderCache());
-  },
-  getCookieCache: function() {
-    return this.cookieCache || (this.cookieCache = new HttpHeaderCache());
-  },
-  onConsoleClear: function(){
-    if (this.hdrCache) this.hdrCache.clear();
-    if (this.cookieCache) this.cookieCache.clear();
-    StackFrameItem.sweepCache(0);
-  },
 };
-
-//S:New240324
-function HttpHeaderCache(){
-  this.map = new Map();
-  this.nameMap = new Map();
-  this.serial = 1;
-}
-
-HttpHeaderCache.prototype = {
-  map: null,
-  nameMap: null,
-  serial: null,
-  
-  HttpHeader: function(name, value){
-    // original was like return {name:name,value:value};
-    let item, lname = name.toLowerCase();
-    // some are almost never same:
-    switch(lname){
-      // content-length, etag, last-modified, if-modified-since, if-none-match repeat seldom...
-      //
-      // date repeats almost never, but since it is 1 second, multiple following requests are same...
-      case 'date':{
-        item = this.map.get(name);
-        if(item&&(item.value==value)&&(item.name==name))return item;
-        // but at least share same name string:
-        if(lname=this.nameMap.get(name))name=lname;
-        else this.nameMap.set(name,name);
-        //
-        item = {name:name,value:value};
-        this.map.set(name,item);
-        return item;
-      }
-    }
-    // others may be cached:
-    let key = this.hashHeader(name,value), arr,i;
-    item = this.map.get(key);
-    if(item){
-      // has cached item or array:
-      if((item.name==name)&&(item.value==value)){
-        item.used = ++this.serial;
-        return item;
-      }
-      if(item.length){
-        // already array...
-        arr = item;
-        for(i=arr.length-1;i>=0;i--)if((item=arr[i])&&(item.name==name)&&(item.value==value))return item;
-      }else{
-        // make array in this node:
-        arr = [item];
-        this.map.set(key, arr);
-      }
-    }else{
-      // if we cache too much, flush the cache...
-      if(this.map.size>=1024) this.sweepCache(128);
-    }
-    // will cache new item:
-    if(item=this.nameMap.get(name))name=item;
-    else this.nameMap.set(name,name);
-    //
-    item = { name: name, value: value };
-    Object.defineProperty(item,'used',HttpHeaderCache.Desc(++this.serial,false));
-    if(arr)arr.push(item);
-    else this.map.set(key,item);
-    //
-    return item;
-  },
-  hashHeader: function(name, value) {
-    // from immutable.js , just hashing two strings together...
-    var i,hash=0;
-    for(i = 0; i < name.length; i++) hash = 31 * hash + name.charCodeAt(i) | 0;
-    for(i = 0; i < value.length; i++) hash = 31 * hash + value.charCodeAt(i) | 0;
-    // function smi(i32){ return ((i32>>>1)&0x40000000) | (i32&0xbfffffff) }
-    return ((hash>>>1)&0x40000000) | (hash&0xbfffffff);
-  },
-  cacheCookies: function(list) {
-    // cache array items which were already parsed elsewhere...
-    if(!list)return list;
-    var i,c=list.length,item;
-    for(i=0;i<c;i++){
-      item = list[i];
-      if (item.name&&item.value) list[i] = this.HttpHeader(item.name,item.value);
-    }
-    return list;
-  },
-  sweepCache: function(maxCount) {
-    let pair,item,map=this.map,A=[],n=maxCount;
-    for(pair of map)if(!pair[1].length)A.push(pair);
-    A.sort(function(a,b){return b[1].used - a[1].used});
-    map.clear();
-    for(pair of A)if(n-->0)map.set(pair[0],pair[1]);else break;
-  },
-  clear: function(){
-    this.map && this.map.clear();
-    this.nameMap && this.nameMap.clear();
-  }
-};
-HttpHeaderCache.Desc = function(value, isEnum = true){
-  let dsc = HttpHeaderCache.dsc || (HttpHeaderCache.dsc = {value:null,enumerable:!0,writable:!0,configurable:!0});
-  dsc.value = value;
-  dsc.enumerable = isEnum;
-  return dsc;
-};
-//
-//
 
 /**
  * The NetworkMonitorChild is used to proxy all of the network activity of the
@@ -1837,8 +1551,6 @@ HttpHeaderCache.Desc = function(value, isEnum = true){
  * data to the WebConsoleActor or to a NetworkEventActor.
  *
  * @constructor
- * @param number appId
- *        The web appId of the child process.
  * @param number outerWindowID
  *        The outerWindowID of the TabActor's main window.
  * @param nsIMessageManager messageManager
@@ -1848,8 +1560,7 @@ HttpHeaderCache.Desc = function(value, isEnum = true){
  * @param object owner
  *        The WebConsoleActor that is listening for the network requests.
  */
-function NetworkMonitorChild(appId, outerWindowID, messageManager, conn, owner) {
-  this.appId = appId;
+function NetworkMonitorChild(outerWindowID, messageManager, conn, owner) {
   this.outerWindowID = outerWindowID;
   this.conn = conn;
   this.owner = owner;
@@ -1863,7 +1574,6 @@ function NetworkMonitorChild(appId, outerWindowID, messageManager, conn, owner) 
 exports.NetworkMonitorChild = NetworkMonitorChild;
 
 NetworkMonitorChild.prototype = {
-  appId: null,
   owner: null,
   _netEvents: null,
   _saveRequestAndResponseBodies: true,
@@ -1909,7 +1619,6 @@ NetworkMonitorChild.prototype = {
     mm.addMessageListener(`${this._msgName}:newEvent`, this._onNewEvent);
     mm.addMessageListener(`${this._msgName}:updateEvent`, this._onUpdateEvent);
     mm.sendAsyncMessage(this._msgName, {
-      appId: this.appId,
       outerWindowID: this.outerWindowID,
       action: "start",
     });

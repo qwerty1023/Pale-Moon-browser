@@ -309,11 +309,7 @@ WebConsoleActor.prototype =
   actorPrefix: "console",
 
   get globalDebugObject() {
-    //S:x240323: return this.parentActor.threadActor.globalDebugObject;
-    //S:New240323 - avoid problems if scratchpad executes in Browser Context:
-    let pa=this.parentActor, ta=pa?pa.threadActor:null;
-    return ta?ta.globalDebugObject:null;
-    //
+    return this.parentActor.threadActor.globalDebugObject;
   },
 
   grip: function WCA_grip()
@@ -573,11 +569,9 @@ WebConsoleActor.prototype =
 
     let startedListeners = [];
     let window = !this.parentActor.isRootActor ? this.window : null;
-    let appId = null;
     let messageManager = null;
 
     if (this._parentIsContentActor) {
-      appId = this.parentActor.docShell.appId;
       messageManager = this.parentActor.messageManager;
     }
 
@@ -608,16 +602,16 @@ WebConsoleActor.prototype =
             // Create a StackTraceCollector that's going to be shared both by the
             // NetworkMonitorChild (getting messages about requests from parent) and
             // by the NetworkMonitor that directly watches service workers requests.
-            this.stackTraceCollector = new StackTraceCollector({ window, appId });
+            this.stackTraceCollector = new StackTraceCollector({ window });
             this.stackTraceCollector.init();
 
             let processBoundary = Services.appinfo.processType !=
                                   Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
-            if ((appId || messageManager) && processBoundary) {
+            if (messageManager && processBoundary) {
               // Start a network monitor in the parent process to listen to
               // most requests than happen in parent
               this.networkMonitor =
-                new NetworkMonitorChild(appId, this.parentActor.outerWindowID,
+                new NetworkMonitorChild(this.parentActor.outerWindowID,
                                         messageManager, this.conn, this);
               this.networkMonitor.init();
               // Spawn also one in the child to listen to service workers
@@ -1074,27 +1068,6 @@ WebConsoleActor.prototype =
     CONSOLE_WORKER_IDS.forEach((aId) => {
       ConsoleAPIStorage.clearEvents(aId);
     });
-    
-    //S:New240325 - Web Console clear button should clear NetworkEventActor items from its NetworkMonitor ...
-    // not sure about other actors in that pool...
-    if (this._actorPool && this.networkMonitor) {
-      let A = [], actor, acts = this._actorPool._actors, aid, n;
-      let voidActor={actorID:0,release:function(){},stub:true};
-      for(n in acts)if(n.indexOf('netEvent')>=0)A.push(acts[n]);
-      for(actor of A)if(actor){
-        aid = actor.actorID;
-        if(actor.release)actor.release();
-        // sometimes the actors are not removed, possibly because of scratchpad inspector visited them ???
-        // or because there are thousands of them and "delete" operator has some bug in such case ?
-        // in such case, plain delete does not work, not sure why...
-        if(aid && acts[aid]){
-          acts[aid]=voidActor;
-          delete acts[aid];
-        }
-      }
-      if(this.networkMonitor.onConsoleClear) this.networkMonitor.onConsoleClear();
-    }
-    //
 
     if (this.parentActor.isRootActor) {
       Services.console.logStringMessage(null); // for the Error Console
