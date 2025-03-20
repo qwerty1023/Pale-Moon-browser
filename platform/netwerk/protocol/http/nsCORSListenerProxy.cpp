@@ -215,18 +215,15 @@ static bool EnsurePreflightCache()
 void
 nsPreflightCache::CacheEntry::PurgeExpired(TimeStamp now)
 {
-  for (uint32_t i = 0, len = mMethods.Length(); i < len; ++i) {
+  uint32_t i;
+  for (i = 0; i < mMethods.Length(); ++i) {
     if (now >= mMethods[i].expirationTime) {
-      mMethods.UnorderedRemoveElementAt(i);
-      --i; // Examine the element again, if necessary.
-      --len;
+      mMethods.RemoveElementAt(i--);
     }
   }
-  for (uint32_t i = 0, len = mHeaders.Length(); i < len; ++i) {
+  for (i = 0; i < mHeaders.Length(); ++i) {
     if (now >= mHeaders[i].expirationTime) {
-      mHeaders.UnorderedRemoveElementAt(i);
-      --i; // Examine the element again, if necessary.
-      --len;
+      mHeaders.RemoveElementAt(i--);
     }
   }
 }
@@ -238,26 +235,25 @@ nsPreflightCache::CacheEntry::CheckRequest(const nsCString& aMethod,
   PurgeExpired(TimeStamp::NowLoRes());
 
   if (!aMethod.EqualsLiteral("GET") && !aMethod.EqualsLiteral("POST")) {
-    struct CheckToken {
-      bool Equals(const TokenTime& e, const nsCString& method) const {
-        return e.token.Equals(method);
-      }
-    };
-
-    if (!mMethods.Contains(aMethod, CheckToken())) {
+    uint32_t i;
+    for (i = 0; i < mMethods.Length(); ++i) {
+      if (aMethod.Equals(mMethods[i].token))
+        break;
+    }
+    if (i == mMethods.Length()) {
       return false;
     }
   }
 
-  struct CheckHeaderToken {
-    bool Equals(const TokenTime& e, const nsCString& header) const {
-      return e.token.Equals(header, comparator);
-    }
-
-    const nsCaseInsensitiveCStringComparator comparator;
-  } checker;
   for (uint32_t i = 0; i < aHeaders.Length(); ++i) {
-    if (!mHeaders.Contains(aHeaders[i], checker)) {
+    uint32_t j;
+    for (j = 0; j < mHeaders.Length(); ++j) {
+      if (aHeaders[i].Equals(mHeaders[j].token,
+                             nsCaseInsensitiveCStringComparator())) {
+        break;
+      }
+    }
+    if (j == mHeaders.Length()) {
       return false;
     }
   }
@@ -1386,8 +1382,8 @@ nsCORSPreflightListener::CheckPreflightRequestApproved(nsIRequest* aRequest)
         ) {
       continue;
     }
-    const auto& comparator = nsCaseInsensitiveCStringArrayComparator();
-    if (!headers.Contains(mPreflightHeaders[i], comparator)) {
+    if (!headers.Contains(mPreflightHeaders[i],
+                          nsCaseInsensitiveCStringArrayComparator())) {
       LogBlockedRequest(aRequest, "CORSMissingAllowHeaderFromPreflight",
                         NS_ConvertUTF8toUTF16(mPreflightHeaders[i]).get());
       return NS_ERROR_DOM_BAD_URI;
