@@ -399,7 +399,6 @@ pref("media.ffmpeg.enabled", false);
 #else
 pref("media.ffmpeg.enabled", true);
 #endif
-pref("media.libavcodec.allow-obsolete", false);
 #endif
 #if defined(MOZ_FFVPX)
 pref("media.ffvpx.enabled", true);
@@ -3941,9 +3940,9 @@ pref("autocomplete.ungrab_during_mode_switch", true);
 // toggling to use the XUL filepicker
 pref("ui.allow_platform_file_picker", true);
 
+#ifdef MOZ_WIDGET_GTK
 // Allow for using the native GTK file picker. If the application is not run
 // with GTK_USE_PORTAL=1 this pref has no effect.
-#ifdef MOZ_WIDGET_GTK
 pref("widget.allow-gtk-native-file-chooser", false);
 #endif
 
@@ -4734,41 +4733,6 @@ pref("dom.browserElement.maxScreenshotDelayMS", 2000);
 
 // Whether we should show the placeholder when the element is focused but empty.
 pref("dom.placeholder.show_on_focus", true);
-
-// MMS UA Profile settings
-pref("wap.UAProf.url", "");
-pref("wap.UAProf.tagname", "x-wap-profile");
-
-// MMS version 1.1 = 0x11 (or decimal 17)
-// MMS version 1.3 = 0x13 (or decimal 19)
-// @see OMA-TS-MMS_ENC-V1_3-20110913-A clause 7.3.34
-pref("dom.mms.version", 19);
-
-pref("dom.mms.requestStatusReport", true);
-
-// Retrieval mode for MMS
-// manual: Manual retrieval mode.
-// automatic: Automatic retrieval mode even in roaming.
-// automatic-home: Automatic retrieval mode in home network.
-// never: Never retrieval mode.
-pref("dom.mms.retrieval_mode", "manual");
-
-pref("dom.mms.sendRetryCount", 3);
-pref("dom.mms.sendRetryInterval", "10000,60000,180000");
-
-pref("dom.mms.retrievalRetryCount", 4);
-pref("dom.mms.retrievalRetryIntervals", "60000,300000,600000,1800000");
-// Numeric default service id for MMS API calls with |serviceId| parameter
-// omitted.
-pref("dom.mms.defaultServiceId", 0);
-// Debug enabler for MMS.
-pref("mms.debugging.enabled", false);
-
-// Request read report while sending MMS.
-pref("dom.mms.requestReadReport", true);
-
-// Number of RadioInterface instances to create.
-pref("ril.numRadioInterfaces", 0);
 
 // If the user puts a finger down on an element and we think the user
 // might be executing a pan gesture, how long do we wait before
