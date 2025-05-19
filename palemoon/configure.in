@@ -48,3 +48,34 @@ if test -n "$MOZ_PERSONAS"; then
 fi
 
 AC_SUBST(MOZ_PERSONAS)
+
+dnl ========================================================
+dnl = Optionally set installer architecture check for 64-bit
+dnl = Defaults to AVX
+dnl ========================================================
+
+dnl MOZ_ARG_WITH_STRING(installer-check,
+dnl [  --with-installer-check=args   For which CPU instruction set the installer should check.],
+dnl     INSTALLER_ARCH=$withval,
+dnl     INSTALLER_ARCH="AVX")
+
+if test -z "$INSTALLER_ARCH"; then
+    INSTALLER_ARCH="AVX"
+fi
+
+if test "$INSTALLER_ARCH" = "SSE2"; then
+    INSTALLER_ARCH_SSE2=1
+    AC_DEFINE(INSTALLER_ARCH_SSE2)
+elif test "$INSTALLER_ARCH" = "AVX"; then
+    INSTALLER_ARCH_AVX=1
+    AC_DEFINE(INSTALLER_ARCH_AVX)
+elif test "$INSTALLER_ARCH" = "AVX2"; then
+    INSTALLER_ARCH_AVX2=1
+    AC_DEFINE(INSTALLER_ARCH_AVX2)
+else
+    AC_MSG_ERROR([Installer CPU check should be one of SSE2, AVX or AVX2.])
+fi
+
+AC_MSG_WARN([Installer will check for $INSTALLER_ARCH])
+AC_SUBST(INSTALLER_ARCH)
+

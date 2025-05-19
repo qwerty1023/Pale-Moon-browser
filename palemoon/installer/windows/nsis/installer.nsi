@@ -778,9 +778,7 @@ Function CheckExistingInstall
 FunctionEnd
 
 Function LaunchApp
-!ifndef DEV_EDITION
   ${ManualCloseAppPrompt} "${WindowClass}" "$(WARN_MANUALLY_CLOSE_APP_LAUNCH)"
-!endif
 
   ClearErrors
   ${GetParameters} $0
@@ -1074,7 +1072,48 @@ Function .onInit
     ExecShell "open" "${URLSystemRequirements}"
     Quit
   ${EndUnless}
+
   SetRegView 64
+  ; Don't install on systems that don't support the specified instruction set.
+  ; The parameter value of 39 is for PF_AVX_INSTRUCTIONS_AVAILABLE and
+  ; 40 is for PF_AVX2_INSTRUCTIONS_AVAILABLE which will check whether the
+  ; instruction set is available. Result returned in $R7.
+  ; This is only available on Windows 10 or later. There's no way to check
+  ; this on kernel versions < 10.0.2004 through the Windows API.
+  ; SSE2 is already checked above as absolute minimum for all architectures.
+  ${If} ${AtLeastWin10}
+    ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "ReleaseId"
+!ifdef DEBUG
+    {$If} $0 == ""
+      StrCpy $0 "undefined"
+    {$EndIf}
+    MessageBox MB_OK|MB_ICONINFORMATION "Debug: O.S. ReleaseId = $0"
+!endif
+    ${If} $0 != "1507"
+    ${AndIf} $0 != "1511"
+    ${AndIf} $0 != "1607"
+    ${AndIf} $0 != "1703"
+    ${AndIf} $0 != "1709"
+    ${AndIf} $0 != "1803"
+    ${AndIf} $0 != "1809"
+    ${AndIf} $0 != "1903"
+    ${AndIf} $0 != "1909"
+      ${If} "${InstallerArch}" == "AVX"
+        System::Call "kernel32::IsProcessorFeaturePresent(i 39)i .R7"
+      ${Else}
+        ${If} "${InstallerArch}" == "AVX2"
+          System::Call "kernel32::IsProcessorFeaturePresent(i 40)i .R7"
+        ${Else}
+          ; Use previous value of $R7 from the SSE2 check above.
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ${If} "$R7" == "0"
+    MessageBox MB_OKCANCEL|MB_ICONSTOP "$(WARN_MIN_SUPPORTED_CPU64_MSG)" IDCANCEL +2
+    ExecShell "open" "${URLSystemRequirements}"
+    Quit
+  ${EndIf}  
 !endif
 
   ${InstallOnInitCommon} "$(WARN_MIN_SUPPORTED_OSVER_CPU_MSG)"
