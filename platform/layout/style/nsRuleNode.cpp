@@ -6423,6 +6423,15 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
       display->mOverflowY = NS_STYLE_OVERFLOW_HIDDEN;
     }
 
+    // If 'visible' is specified but doesn't match the other dimension, it
+    // turns into 'auto'.
+    if (display->mOverflowX == NS_STYLE_OVERFLOW_VISIBLE) {
+      display->mOverflowX = NS_STYLE_OVERFLOW_AUTO;
+    }
+    if (display->mOverflowY == NS_STYLE_OVERFLOW_VISIBLE) {
+      display->mOverflowY = NS_STYLE_OVERFLOW_AUTO;
+    }
+    
   }
 
   // When 'contain: paint', update overflow from 'visible' to 'clip'.
@@ -10080,7 +10089,18 @@ SetStyleShapeSourceToCSSValue(
   if (basicShape) {
     aShapeSource->SetBasicShape(basicShape, referenceBox);
   } else {
-    aShapeSource->SetReferenceBox(referenceBox);
+    if (mozilla::IsSame<ReferenceBox, StyleGeometryBox>::value && 
+      referenceBox != ReferenceBox::NoBox) {
+      RefPtr<StyleBasicShape> defaultInset = new StyleBasicShape(StyleBasicShapeType::Inset);
+      nsStyleCoord zero;
+      zero.SetCoordValue(0);
+      for (int i = 0; i < 4; i++) {
+        defaultInset->Coordinates().AppendElement(zero);
+      }
+      aShapeSource->SetBasicShape(defaultInset, referenceBox);
+    } else {
+      aShapeSource->SetReferenceBox(referenceBox);
+    }
   }
 }
 
