@@ -2346,10 +2346,9 @@ nsObjectLoadingContent::LoadObject(bool aNotify,
   // if the scheme of `mURI` is one that would return a network error. The
   // following schemes are allowed through in scheme fetch:
   // "about", "blob", "data", "file", "http", "https".
-  // XXXMC: Should we include "ftp" as well?
   //
   // Some accessibility tests use our internal "chrome" scheme.
-  if (mType != eType_Null) {
+  if (mType != eType_Null && mURI) {
     bool isCandidate = false;
     for (const auto& candidate :
          {"about", "blob", "chrome", "data", "file", "http", "https"}) {
