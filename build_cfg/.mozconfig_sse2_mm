@@ -17,14 +17,14 @@ mk_add_options AUTOCLOBBER=1
 # Application and target
 ac_add_options --enable-application=palemoon
 
-export MOZ_PKG_SPECIAL=avx
+export MOZ_PKG_SPECIAL=sse2_mm
 
 # Build options
 # Adjust the -j parameter if you need more or fewer parallel build tasks
 # Maximum supported without build errors is around 32
 mk_add_options MOZ_MAKE_FLAGS="-j8"
 
-ac_add_options --enable-optimize="-O2 -GTs -GS- -arch:AVX"
+ac_add_options --enable-optimize="-O2 -GTs -GS- -arch:SSE2"
 
 # Please see https://www.palemoon.org/redist.shtml for restrictions when using the official branding.
 ac_add_options --enable-official-branding
@@ -41,7 +41,7 @@ ac_add_options --disable-debug
 ac_add_options --disable-precompiled-startupcache
 
 ac_add_options --disable-jemalloc
-ac_add_options --disable-mimalloc
+ac_add_options --enable-mimalloc
 
 ac_add_options --enable-strip
 

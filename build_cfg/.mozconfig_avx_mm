@@ -17,7 +17,7 @@ mk_add_options AUTOCLOBBER=1
 # Application and target
 ac_add_options --enable-application=palemoon
 
-export MOZ_PKG_SPECIAL=avx
+export MOZ_PKG_SPECIAL=avx_mm
 
 # Build options
 # Adjust the -j parameter if you need more or fewer parallel build tasks
@@ -41,7 +41,7 @@ ac_add_options --disable-debug
 ac_add_options --disable-precompiled-startupcache
 
 ac_add_options --disable-jemalloc
-ac_add_options --disable-mimalloc
+ac_add_options --enable-mimalloc
 
 ac_add_options --enable-strip
 
