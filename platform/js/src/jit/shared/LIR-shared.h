@@ -8219,30 +8219,24 @@ class LArrowNewTarget : public LInstructionHelper<BOX_PIECES, 1, 0>
 };
 
 // Math.random().
-#ifdef JS_PUNBOX64
-# define LRANDOM_NUM_TEMPS 3
-#else
-# define LRANDOM_NUM_TEMPS 5
-#endif
+// Note: We use 5 for 32-bit and 6 for 64-bit, just define 6 globally.
+// See comment in Codegenerator.cpp's visitRandom()
+# define LRANDOM_NUM_TEMPS 6
 
 class LRandom : public LInstructionHelper<1, 0, LRANDOM_NUM_TEMPS>
 {
   public:
     LIR_HEADER(Random)
     LRandom(const LDefinition &temp0, const LDefinition &temp1,
-            const LDefinition &temp2
-#ifndef JS_PUNBOX64
-            , const LDefinition &temp3, const LDefinition &temp4
-#endif
-            )
+            const LDefinition &temp2, const LDefinition &temp3,
+            const LDefinition &temp4, const LDefinition &temp5)
     {
         setTemp(0, temp0);
         setTemp(1, temp1);
         setTemp(2, temp2);
-#ifndef JS_PUNBOX64
         setTemp(3, temp3);
         setTemp(4, temp4);
-#endif
+        setTemp(5, temp5);
     }
     const LDefinition* temp0() {
         return getTemp(0);
@@ -8250,17 +8244,18 @@ class LRandom : public LInstructionHelper<1, 0, LRANDOM_NUM_TEMPS>
     const LDefinition* temp1() {
         return getTemp(1);
     }
-    const LDefinition *temp2() {
+    const LDefinition* temp2() {
         return getTemp(2);
     }
-#ifndef JS_PUNBOX64
-    const LDefinition *temp3() {
+    const LDefinition* temp3() {
         return getTemp(3);
     }
-    const LDefinition *temp4() {
+    const LDefinition* temp4() {
         return getTemp(4);
     }
-#endif
+    const LDefinition* temp5() {
+        return getTemp(5);
+    }
 
     MRandom* mir() const {
         return mir_->toRandom();

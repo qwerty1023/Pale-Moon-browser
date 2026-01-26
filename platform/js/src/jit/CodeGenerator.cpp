@@ -12051,14 +12051,17 @@ CodeGenerator::visitDebugCheckSelfHosted(LDebugCheckSelfHosted* ins)
 void
 CodeGenerator::visitRandom(LRandom* ins)
 {
-    using mozilla::non_crypto::XorShift128PlusRNG;
+    using mozilla::non_crypto::Xoroshiro128PlusPlusRNG;
 
     FloatRegister output = ToFloatRegister(ins->output());
     Register tempReg = ToRegister(ins->temp0());
-
 #ifdef JS_PUNBOX64
     Register64 s0Reg(ToRegister(ins->temp1()));
     Register64 s1Reg(ToRegister(ins->temp2()));
+    // Helper registers for intermediate and final results
+    Register64 imr1Reg(ToRegister(ins->temp3()));
+    Register64 imr2Reg(ToRegister(ins->temp4()));
+    Register64 resultReg(ToRegister(ins->temp5()));
 #else
     Register64 s0Reg(ToRegister(ins->temp1()), ToRegister(ins->temp2()));
     Register64 s1Reg(ToRegister(ins->temp3()), ToRegister(ins->temp4()));
@@ -12067,12 +12070,48 @@ CodeGenerator::visitRandom(LRandom* ins)
     const void* rng = gen->compartment->addressOfRandomNumberGenerator();
     masm.movePtr(ImmPtr(rng), tempReg);
 
-    static_assert(sizeof(XorShift128PlusRNG) == 2 * sizeof(uint64_t),
-                  "Code below assumes XorShift128PlusRNG contains two uint64_t values");
+    static_assert(sizeof(Xoroshiro128PlusPlusRNG) == 2 * sizeof(uint64_t),
+                  "Code below assumes Xoroshiro128PlusPlusRNG contains two uint64_t values");
 
-    Address state0Addr(tempReg, XorShift128PlusRNG::offsetOfState0());
-    Address state1Addr(tempReg, XorShift128PlusRNG::offsetOfState1());
+    Address state0Addr(tempReg, Xoroshiro128PlusPlusRNG::offsetOfState0());
+    Address state1Addr(tempReg, Xoroshiro128PlusPlusRNG::offsetOfState1());
 
+#ifdef JS_PUNBOX64
+    // const uint64_t s0 = mState[0];
+    masm.load64(state0Addr, s0Reg);
+    // uint64_t s1 = mState[1];
+    masm.load64(state1Addr, s1Reg);
+    
+    // const uint64_t result = rotl(s0 + s1, 17) + s0;
+    masm.move64(s0Reg, imr1Reg);
+    masm.add64(s1Reg, imr1Reg);
+    masm.rotateLeft64(Imm32(17), imr1Reg, resultReg);
+    masm.add64(s0Reg, resultReg);
+    
+    // s1 ^= s0;
+    masm.xor64(s0Reg, s1Reg);
+    
+    // mState[0] = rotl(s0, 49) ^ s1 ^ (s1 << 21); // a, b
+    masm.rotateLeft64(Imm32(49), s0Reg, imr1Reg);   // imr = s0 rotl 49
+    masm.xor64(s1Reg, imr1Reg);                     // imr ^ s1
+    masm.move64(s1Reg, imr2Reg);                    // imr2 = s1
+    masm.lshift64(Imm32(21), imr2Reg);              // imr2 << 21
+    masm.xor64(imr2Reg, imr1Reg);                   // imr ^ imr2
+    masm.store64(imr1Reg, state0Addr);
+
+    // mState[1] = rotl(s1, 28); // c
+    masm.rotateLeft64(Imm32(28), s1Reg, imr1Reg);
+    masm.store64(imr1Reg, state1Addr);
+    
+    // s1 = result (to use below)
+    masm.move64(s1Reg, resultReg);
+#else
+    // TODO: Somehow construct a 32-bit targetable assembly of Xoroshiro128++ here.
+    // We can't fit the Xoroshiro128++ algorithm into the number of temp registers that it requires on 32-bit platforms.
+    // To work around this, our jit implementation on 32-bit platforms is actually the simpler XorShift128+ algorithm.
+    // Since the surrounding data structures remain the same (2x 64-bit state registers) this can be slotted in without
+    // issue here. 
+    
     // uint64_t s1 = mState[0];
     masm.load64(state0Addr, s1Reg);
 
@@ -12105,11 +12144,13 @@ CodeGenerator::visitRandom(LRandom* ins)
     // s1 += mState[0]
     masm.load64(state0Addr, s0Reg);
     masm.add64(s0Reg, s1Reg);
+#endif
 
-    // See comment in XorShift128PlusRNG::nextDouble().
+    // See comment in Xoroshiro128PlusPlusRNG::nextDouble().
     static const int MantissaBits = FloatingPoint<double>::kExponentShift + 1;
     static const double ScaleInv = double(1) / (1ULL << MantissaBits);
 
+    // Mask the result bits to mantissa size
     masm.and64(Imm64((1ULL << MantissaBits) - 1), s1Reg);
 
     if (masm.convertUInt64ToDoubleNeedsTemp())
