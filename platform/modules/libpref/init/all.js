@@ -1931,6 +1931,12 @@ pref("network.predictor.max-resources-per-entry", 100);
 pref("network.predictor.max-uri-length", 500);
 pref("network.predictor.cleaned-up", false);
 
+// Cloudflare Image Resizing compatibility.
+// When enabled, URLs containing the "/cdn-cgi/image/" marker will have
+// everything after that marker treated as opaque path data. This matches
+// Cloudflare's expectations for Image Resizing URLs.
+pref("network.url.cloudflare_image_resizing.enabled", true);
+
 // The following prefs pertain to the negotiate-auth extension (see bug 17578),
 // which provides transparent Kerberos or NTLM authentication using the SPNEGO
 // protocol.  Each pref is a comma-separated list of keys, where each key has
@@ -4201,11 +4207,7 @@ pref("image.decode-immediately.enabled", false);
 pref("image.downscale-during-decode.enabled", true);
 
 // The default Accept header sent for images loaded over HTTP(S)
-#ifdef MOZ_JXL
 pref("image.http.accept", "image/webp,image/jxl,image/png,image/*;q=0.8,*/*;q=0.5");
-#else
-pref("image.http.accept", "image/webp,image/png,image/*;q=0.8,*/*;q=0.5");
-#endif
 
 // The threshold for inferring that changes to an <img> element's |src|
 // attribute by JavaScript represent an animation, in milliseconds. If the |src|
@@ -4261,11 +4263,6 @@ pref("image.mem.surfacecache.discard_factor", 1);
 // How many threads we'll use for multithreaded decoding. If < 0, will be
 // automatically determined based on the system's number of cores.
 pref("image.multithreaded_decoding.limit", -1);
-
-#ifdef MOZ_JXL
-// Whether we attempt to decode JPEG-XL images or not.
-pref("image.jxl.enabled", true);
-#endif
 
 // Limit for the canvas image cache. 0 means we don't limit the size of the
 // cache.
