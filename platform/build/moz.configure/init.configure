@@ -401,20 +401,11 @@ def split_triplet(triplet):
     )
 
 
-
-
 @imports('subprocess')
 def config_sub(shell, triplet):
-    def _ensure_str(x):
-        decode = getattr(x, 'decode', None)
-        if decode is not None:
-            return decode('utf-8', errors='replace')
-        return x
-
     config_sub = os.path.join(os.path.dirname(__file__), '..',
                               'autoconf', 'config.sub')
-    return subprocess.check_output([_ensure_str(shell), _ensure_str(config_sub),
-                                   _ensure_str(triplet)],
+    return subprocess.check_output([shell, config_sub, triplet],
                                    universal_newlines=True).strip()
 
 
@@ -422,16 +413,11 @@ def config_sub(shell, triplet):
 @checking('for host system type', lambda h: h.alias)
 @imports('subprocess')
 def host(value, shell):
-    def _ensure_str(x):
-        decode = getattr(x, 'decode', None)
-        if decode is not None:
-            return decode('utf-8', errors='replace')
-        return x
-
     if not value:
         config_guess = os.path.join(os.path.dirname(__file__), '..',
                                     'autoconf', 'config.guess')
-        host = subprocess.check_output([_ensure_str(shell), _ensure_str(config_guess)]).strip()
+        host = subprocess.check_output([shell, config_guess],
+                                       universal_newlines=True).strip()
     else:
         host = value[0]
 
