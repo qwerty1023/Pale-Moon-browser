@@ -13,11 +13,11 @@ import re
 import subprocess
 import sys
 import pickle
-from locale import getpreferredencoding
+from mozbuild.getencoding import getencoding
 
 import mozpack.path as mozpath
 
-encoding = getpreferredencoding(False)
+encoding = getencoding()
 
 class Pool(object):
     def __new__(cls, size):

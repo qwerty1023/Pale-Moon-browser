@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import re
 from mozbuild.makeutil import Makefile
+from mozbuild.getencoding import getencoding
 
 # The are the insert points for a GNU ld linker script, assuming a more
 # or less "standard" default linker script. This is not a dict because
@@ -345,8 +346,8 @@ def main(args, proc_callback=None):
         (stdout, stderr) = proc.communicate()
         if proc.returncode and not options.verbose:
             print_command(sys.stderr, args)
-       # sys.stderr.write(stdout.decode(encoding='utf-8'))
-        sys.stderr.flush()
+        sys.stderr.buffer.write(stdout)
+        sys.stderr.buffer.flush()
         if proc.returncode:
             return proc.returncode
         return 0
