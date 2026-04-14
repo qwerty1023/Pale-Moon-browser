@@ -4216,11 +4216,6 @@ else
         AC_MSG_ERROR([Cannot find cl -showIncludes prefix.])
     fi
     AC_SUBST(CL_INCLUDES_PREFIX)
-    dnl Write to file immediately. Environment variables and command line args
-    dnl outside of ASCII and maybe Latin-1 on Windows are often corrupted,
-    dnl so be VERY careful. Console codepage != ANSI codepage, but
-    dnl Python and MSYS don't grasp this, and it's been true since NT 3.1...
-    echo "$CL_INCLUDES_PREFIX" > cl_inc.txt
     rm -f dummy-hello.c
 
     dnl Make sure that the build system can handle non-ASCII characters

@@ -61,7 +61,7 @@ class MozconfigLoadException(Exception):
 class MozconfigLoader(object):
     """Handles loading and parsing of mozconfig files."""
 
-    RE_MAKE_VARIABLE = re.compile('''
+    RE_MAKE_VARIABLE = re.compile(r'''
         ^\s*                    # Leading whitespace
         (?P<var>[a-zA-Z_0-9]+)  # Variable name
         \s* [?:]?= \s*          # Assignment operator surrounded by optional
@@ -368,10 +368,7 @@ class MozconfigLoader(object):
             # is now done cleanly and defensively enough to avoid
             # losing data.
             if isinstance(line, bytes):
-                try:
-                    line = line.decode('utf-8')
-                except UnicodeDecodeError:
-                    line = line.decode(encoding, errors='replace')
+                line = line.decode(encoding, errors='replace')
             elif not isinstance(line, str):
                 line = str(line)
 
