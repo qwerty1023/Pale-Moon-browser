@@ -397,9 +397,9 @@ def check_compiler(compiler, language, target):
 @imports('json')
 @imports('subprocess')
 @imports('sys')
-@imports(_from='locale', _import='getpreferredencoding')
+@imports(_from='mozbuild.getencoding', _import='getencoding')
 def get_vc_paths(topsrcdir):
-    encoding = getpreferredencoding(False)
+    encoding = getencoding()
     def vswhere(args):
         return json.loads(subprocess.check_output([os.path.join(topsrcdir, 'build/win32/vswhere.exe'), '-format', 'json'] + args).decode(encoding, errors='replace'))
 

@@ -368,7 +368,10 @@ class MozconfigLoader(object):
             # is now done cleanly and defensively enough to avoid
             # losing data.
             if isinstance(line, bytes):
-                line = line.decode(encoding, errors='replace')
+                try:
+                    line = line.decode('utf-8')
+                except UnicodeDecodeError:
+                    line = line.decode(encoding, errors='replace')
             elif not isinstance(line, str):
                 line = str(line)
 

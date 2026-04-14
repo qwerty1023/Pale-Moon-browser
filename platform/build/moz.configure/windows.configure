@@ -408,9 +408,9 @@ mt = check_prog('MT', depends_win()(lambda: ('mt.exe',)), input='MT',
 @depends_win(mt)
 @checking('whether MT is really Microsoft Manifest Tool', lambda x: bool(x))
 @imports('subprocess')
-@imports(_from='locale', _import='getpreferredencoding')
+@imports(_from='mozbuild.getencoding', _import='getencoding')
 def valid_mt(path):
-    encoding = getpreferredencoding(False)
+    encoding = getencoding()
     try:
         out = subprocess.check_output([path])
         out = out.decode(encoding, errors='replace').splitlines()

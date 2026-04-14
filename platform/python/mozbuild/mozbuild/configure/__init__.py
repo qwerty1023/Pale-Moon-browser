@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import types
+import io
 from collections import OrderedDict
 from contextlib import contextmanager
 from functools import wraps
@@ -36,6 +37,7 @@ from mozbuild.util import (
     ReadOnlyDict,
     ReadOnlyNamespace,
 )
+from mozbuild.getencoding import getencoding
 
 import mozpack.path as mozpath
 
@@ -270,7 +272,7 @@ class ConfigureSandbox(dict):
         # Some callers will manage to log a bytestring with characters in it
         # that can't be converted to ascii. Make our log methods robust to this
         # by detecting the encoding that a producer is likely to have used.
-        encoding = getpreferredencoding()
+        encoding = getencoding()
         def wrapped_log_method(logger, key):
             method = getattr(logger, key)
             if not encoding:
@@ -304,7 +306,7 @@ class ConfigureSandbox(dict):
             self._help = HelpFormatter(argv[0])
             self._help.add(self._help_option)
         elif moz_logger:
-            handler = logging.FileHandler('config.log', mode='w', delay=True)
+            handler = logging.FileHandler('config.log', mode='w', delay=True, encoding=encoding)
             handler.setFormatter(formatter)
             logger.addHandler(handler)
 

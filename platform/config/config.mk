@@ -120,8 +120,8 @@ CONFIG_TOOLS	= $(MOZ_BUILD_ROOT)/config
 AUTOCONF_TOOLS	= $(MOZILLA_DIR)/build/autoconf
 
 ifdef _MSC_VER
-CC_WRAPPER ?= $(call py_action,cl)
-CXX_WRAPPER ?= $(call py_action,cl)
+CC_WRAPPER ?= $(call py_action,cl,--includes-prefix=$(DEPTH)/cl_inc.txt)
+CXX_WRAPPER ?= $(call py_action,cl,--includes-prefix=$(DEPTH)/cl_inc.txt)
 endif # _MSC_VER
 
 CC := $(CC_WRAPPER) $(CC)
