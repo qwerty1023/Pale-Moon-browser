@@ -1,0 +1,472 @@
+From bd2f26af42694131fb1e70a38b234a1b96798f69 Mon Sep 17 00:00:00 2001
+From: Jeremy Andrews <athenian200@outlook.com>
+Date: Mon, 6 Apr 2026 02:01:32 -0500
+Subject: [PATCH] No Issue - Test patch for non-English users.
+
+No idea if this is a viable/solid approach long-term or if there are
+downsides, but this basically makes the build system honor CHCP on
+Windows and pay attention to the console encoding rather than just
+the system's ANSI codepage. Russian text appears correctly in the
+build system with this. Even on non-Russian systems thanks to the
+flexibility of this approach.
+
+Has not been tested with many languages, or other OSes. Patch may
+be put on the back burner due to more pressing Linux issues arising.
+---
+ build/moz.configure/old.configure             |  9 ++---
+ build/moz.configure/toolchain.configure       |  4 +--
+ build/moz.configure/util.configure            |  4 +--
+ build/moz.configure/windows.configure         |  4 +--
+ build/subconfigure.py                         |  4 +--
+ config/config.mk                              |  4 +--
+ config/expandlibs_exec.py                     |  5 +--
+ old-configure.in                              |  5 +++
+ python/mozbuild/mozbuild/action/cl.py         | 32 ++++++++++++------
+ .../mozbuild/backend/configenvironment.py     |  2 +-
+ .../mozbuild/mozbuild/configure/__init__.py   |  6 ++--
+ python/mozbuild/mozbuild/getencoding.py       | 18 ++++++++++
+ python/mozbuild/mozbuild/mozconfig.py         |  5 ++-
+ .../mozprocess/mozprocess/processhandler.py   | 33 ++++++++++++-------
+ 14 files changed, 94 insertions(+), 41 deletions(-)
+ create mode 100644 python/mozbuild/mozbuild/getencoding.py
+
+diff --git a/build/moz.configure/old.configure b/build/moz.configure/old.configure
+index 2cb017128b..b59ad573a8 100644
+--- a/build/moz.configure/old.configure
++++ b/build/moz.configure/old.configure
+@@ -23,11 +23,12 @@ m4 = check_prog(
+ @imports(_from='os.path', _import='getmtime')
+ @imports(_from='os.path', _import='exists')
+ @imports(_from='mozbuild.shellutil', _import='quote')
++@imports(_from='mozbuild.getencoding', _import='getencoding')
+ @imports(_from='os', _import='environ')
+-@imports(_from='locale', _import='getpreferredencoding')
+ def prepare_configure(old_configure, mozconfig, awk, m4, build_env, shell,
+                       old_configure_assignments, build_project):
+-    encoding = getpreferredencoding(False)
++
++    encoding = getencoding()
+     # os.path.abspath in the sandbox will ensure forward slashes on Windows,
+     # which is actually necessary because this path actually ends up literally
+     # as $0, and backslashes there breaks autoconf's detection of the source
+@@ -285,10 +286,10 @@ def old_configure_options(*options):
+ @imports('sys')
+ @imports(_from='mozbuild.shellutil', _import='quote')
+ @imports(_from='mozbuild.util', _import='exec_')
+-@imports(_from='locale', _import='getpreferredencoding')
++@imports(_from='mozbuild.getencoding', _import='getencoding')
+ def old_configure(prepare_configure, extra_old_configure_args, all_options,
+                   *options):
+-    encoding = getpreferredencoding()
++    encoding = getencoding()
+     cmd = prepare_configure
+ 
+     # old-configure only supports the options listed in @old_configure_options
+diff --git a/build/moz.configure/toolchain.configure b/build/moz.configure/toolchain.configure
+index d9f4d9e972..81334d9c43 100644
+--- a/build/moz.configure/toolchain.configure
++++ b/build/moz.configure/toolchain.configure
+@@ -397,9 +397,9 @@ def check_compiler(compiler, language, target):
+ @imports('json')
+ @imports('subprocess')
+ @imports('sys')
+-@imports(_from='locale', _import='getpreferredencoding')
++@imports(_from='mozbuild.getencoding', _import='getencoding')
+ def get_vc_paths(topsrcdir):
+-    encoding = getpreferredencoding(False)
++    encoding = getencoding()
+     def vswhere(args):
+         return json.loads(subprocess.check_output([os.path.join(topsrcdir, 'build/win32/vswhere.exe'), '-format', 'json'] + args).decode(encoding, errors='replace'))
+ 
+diff --git a/build/moz.configure/util.configure b/build/moz.configure/util.configure
+index 1a8cc0d265..b6fcad8f55 100644
+--- a/build/moz.configure/util.configure
++++ b/build/moz.configure/util.configure
+@@ -25,9 +25,9 @@ def configure_error(message):
+ @imports('sys')
+ @imports(_from='mozbuild.configure.util', _import='LineIO')
+ @imports(_from='mozbuild.shellutil', _import='quote')
+-@imports(_from='locale', _import='getpreferredencoding')
++@imports(_from='mozbuild.getencoding', _import='getencoding')
+ def check_cmd_output(*args, **kwargs):
+-    encoding = getpreferredencoding(False)
++    encoding = getencoding()
+     onerror = kwargs.pop('onerror', None)
+ 
+     with log.queue_debug():
+diff --git a/build/moz.configure/windows.configure b/build/moz.configure/windows.configure
+index 2d6e6221ad..2f6e34b77e 100644
+--- a/build/moz.configure/windows.configure
++++ b/build/moz.configure/windows.configure
+@@ -408,9 +408,9 @@ mt = check_prog('MT', depends_win()(lambda: ('mt.exe',)), input='MT',
+ @depends_win(mt)
+ @checking('whether MT is really Microsoft Manifest Tool', lambda x: bool(x))
+ @imports('subprocess')
+-@imports(_from='locale', _import='getpreferredencoding')
++@imports(_from='mozbuild.getencoding', _import='getencoding')
+ def valid_mt(path):
+-    encoding = getpreferredencoding(False)
++    encoding = getencoding()
+     try:
+         out = subprocess.check_output([path])
+         out = out.decode(encoding, errors='replace').splitlines()
+diff --git a/build/subconfigure.py b/build/subconfigure.py
+index 397576050d..a4fa214419 100644
+--- a/build/subconfigure.py
++++ b/build/subconfigure.py
+@@ -13,11 +13,11 @@ import re
+ import subprocess
+ import sys
+ import pickle
+-from locale import getpreferredencoding
++from mozbuild.getencoding import getencoding
+ 
+ import mozpack.path as mozpath
+ 
+-encoding = getpreferredencoding(False)
++encoding = getencoding()
+ 
+ class Pool(object):
+     def __new__(cls, size):
+diff --git a/config/config.mk b/config/config.mk
+index b254490ae6..263ebf21a0 100644
+--- a/config/config.mk
++++ b/config/config.mk
+@@ -120,8 +120,8 @@ CONFIG_TOOLS	= $(MOZ_BUILD_ROOT)/config
+ AUTOCONF_TOOLS	= $(MOZILLA_DIR)/build/autoconf
+ 
+ ifdef _MSC_VER
+-CC_WRAPPER ?= $(call py_action,cl)
+-CXX_WRAPPER ?= $(call py_action,cl)
++CC_WRAPPER ?= $(call py_action,cl,--includes-prefix=$(DEPTH)/cl_inc.txt)
++CXX_WRAPPER ?= $(call py_action,cl,--includes-prefix=$(DEPTH)/cl_inc.txt)
+ endif # _MSC_VER
+ 
+ CC := $(CC_WRAPPER) $(CC)
+diff --git a/config/expandlibs_exec.py b/config/expandlibs_exec.py
+index 95088703f7..76b895c9e3 100644
+--- a/config/expandlibs_exec.py
++++ b/config/expandlibs_exec.py
+@@ -37,6 +37,7 @@ import shutil
+ import subprocess
+ import re
+ from mozbuild.makeutil import Makefile
++from mozbuild.getencoding import getencoding
+ 
+ # The are the insert points for a GNU ld linker script, assuming a more
+ # or less "standard" default linker script. This is not a dict because
+@@ -345,8 +346,8 @@ def main(args, proc_callback=None):
+         (stdout, stderr) = proc.communicate()
+         if proc.returncode and not options.verbose:
+             print_command(sys.stderr, args)
+-        sys.stderr.write(stdout.decode(encoding='utf-8'))
+-        sys.stderr.flush()
++        sys.stderr.buffer.write(stdout)
++        sys.stderr.buffer.flush()
+         if proc.returncode:
+             return proc.returncode
+         return 0
+diff --git a/old-configure.in b/old-configure.in
+index f2266de1e3..8dd6a44f6b 100644
+--- a/old-configure.in
++++ b/old-configure.in
+@@ -4216,6 +4216,11 @@ else
+         AC_MSG_ERROR([Cannot find cl -showIncludes prefix.])
+     fi
+     AC_SUBST(CL_INCLUDES_PREFIX)
++    dnl Write to file immediately. Environment variables and command line args
++    dnl outside of ASCII and maybe Latin-1 on Windows are often corrupted,
++    dnl so be VERY careful. Console codepage != ANSI codepage, but
++    dnl Python and MSYS don't grasp this, and it's been true since NT 3.1...
++    echo "$CL_INCLUDES_PREFIX" > cl_inc.txt
+     rm -f dummy-hello.c
+ 
+     dnl Make sure that the build system can handle non-ASCII characters
+diff --git a/python/mozbuild/mozbuild/action/cl.py b/python/mozbuild/mozbuild/action/cl.py
+index abb354c177..988b730f88 100644
+--- a/python/mozbuild/mozbuild/action/cl.py
++++ b/python/mozbuild/mozbuild/action/cl.py
+@@ -1,17 +1,16 @@
++# -*- coding: utf-8 -*-
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+-from __future__ import absolute_import
+-
+ import ctypes
+ import os
+ import sys
++import io
+ 
+ from mozprocess.processhandler import ProcessHandlerMixin
+ from mozbuild.makeutil import Makefile
+-
+-CL_INCLUDES_PREFIX = os.environ.get("CL_INCLUDES_PREFIX", "Note: including file:")
++from mozbuild.getencoding import getencoding
+ 
+ GetShortPathName = ctypes.windll.kernel32.GetShortPathNameW
+ GetLongPathName = ctypes.windll.kernel32.GetLongPathNameW
+@@ -74,25 +73,26 @@ def InvokeClWithDependencyGeneration(cmdline):
+     def on_line(line):
+         # cl -showIncludes prefixes every header with "Note: including file:"
+         # and an indentation corresponding to the depth (which we don't need)
+-        if line.startswith(CL_INCLUDES_PREFIX):
++        if CL_INCLUDES_PREFIX in line:
+             dep = line[len(CL_INCLUDES_PREFIX):].strip()
+             # We can't handle paths with spaces properly in mddepend.pl, but
+             # we can assume that anything in a path with spaces is a system
+             # header and throw it away.
++            dep = dep.decode(getencoding())
+             dep = normcase(dep)
+             if ' ' not in dep:
+                 rule.add_dependencies([dep])
+         else:
+             # Make sure we preserve the relevant output from cl. mozprocess
+             # swallows the newline delimiter, so we need to re-add it.
+-            sys.stdout.write(line)
+-            sys.stdout.write('\n')
++            sys.stdout.buffer.write(line)
++            sys.stdout.buffer.write(b'\n')
+ 
+     # We need to ignore children because MSVC can fire up a background process
+     # during compilation. This process is cleaned up on its own. If we kill it,
+     # we can run into weird compilation issues.
+     p = ProcessHandlerMixin(cmdline, processOutputLine=[on_line],
+-        ignore_children=True)
++        ignore_children=True, raw=True)
+     p.run()
+     p.processOutput()
+     ret = p.wait()
+@@ -117,8 +117,20 @@ def InvokeClWithDependencyGeneration(cmdline):
+ 
+     return 0
+ 
+-def main(args):
+-    return InvokeClWithDependencyGeneration(args)
++def main(argv):
++    import argparse
++
++    global CL_INCLUDES_PREFIX
++
++    parser = argparse.ArgumentParser()
++    parser.add_argument('--includes-prefix')
++
++    args, rest = parser.parse_known_args(argv)
++
++    with open(args.includes_prefix, 'rb') as f:
++        CL_INCLUDES_PREFIX=f.read().rstrip(b'\n')
++
++    return InvokeClWithDependencyGeneration(rest)
+ 
+ if __name__ == "__main__":
+     sys.exit(main(sys.argv[1:]))
+diff --git a/python/mozbuild/mozbuild/backend/configenvironment.py b/python/mozbuild/mozbuild/backend/configenvironment.py
+index dae3e03011..482805c83b 100644
+--- a/python/mozbuild/mozbuild/backend/configenvironment.py
++++ b/python/mozbuild/mozbuild/backend/configenvironment.py
+@@ -47,7 +47,7 @@ class BuildConfig(object):
+             mod.__file__ = path
+             sys.modules['config.status'] = mod
+ 
+-            with open(path, 'rt') as fh:
++            with open(path, 'rb') as fh:
+                 source = fh.read()
+                 code_cache[path] = (
+                     mtime,
+diff --git a/python/mozbuild/mozbuild/configure/__init__.py b/python/mozbuild/mozbuild/configure/__init__.py
+index 5609ca5c2b..204bfeabc8 100644
+--- a/python/mozbuild/mozbuild/configure/__init__.py
++++ b/python/mozbuild/mozbuild/configure/__init__.py
+@@ -11,6 +11,7 @@ import os
+ import re
+ import sys
+ import types
++import io
+ from collections import OrderedDict
+ from contextlib import contextmanager
+ from functools import wraps
+@@ -36,6 +37,7 @@ from mozbuild.util import (
+     ReadOnlyDict,
+     ReadOnlyNamespace,
+ )
++from mozbuild.getencoding import getencoding
+ 
+ import mozpack.path as mozpath
+ 
+@@ -270,7 +272,7 @@ class ConfigureSandbox(dict):
+         # Some callers will manage to log a bytestring with characters in it
+         # that can't be converted to ascii. Make our log methods robust to this
+         # by detecting the encoding that a producer is likely to have used.
+-        encoding = getpreferredencoding()
++        encoding = getencoding()
+         def wrapped_log_method(logger, key):
+             method = getattr(logger, key)
+             if not encoding:
+@@ -304,7 +306,7 @@ class ConfigureSandbox(dict):
+             self._help = HelpFormatter(argv[0])
+             self._help.add(self._help_option)
+         elif moz_logger:
+-            handler = logging.FileHandler('config.log', mode='w', delay=True)
++            handler = logging.FileHandler('config.log', mode='w', delay=True, encoding=encoding)
+             handler.setFormatter(formatter)
+             logger.addHandler(handler)
+ 
+diff --git a/python/mozbuild/mozbuild/getencoding.py b/python/mozbuild/mozbuild/getencoding.py
+new file mode 100644
+index 0000000000..878bcf792d
+--- /dev/null
++++ b/python/mozbuild/mozbuild/getencoding.py
+@@ -0,0 +1,18 @@
++def getencoding():
++    import sys
++    import ctypes
++    from locale import getpreferredencoding
++
++    if sys.platform.startswith("win"):
++       try:
++          codepage = ctypes.windll.kernel32.GetConsoleOutputCP()
++          if codepage:
++              encoding = "cp%d" % codepage
++          else: 
++              encoding = getpreferredencoding(False)
++       except Exception:
++          encoding = getpreferredencoding(False)
++    else:
++       encoding = getpreferredencoding(False)
++
++    return encoding
+diff --git a/python/mozbuild/mozbuild/mozconfig.py b/python/mozbuild/mozbuild/mozconfig.py
+index d7309162b2..631703dc24 100644
+--- a/python/mozbuild/mozbuild/mozconfig.py
++++ b/python/mozbuild/mozbuild/mozconfig.py
+@@ -368,7 +368,10 @@ class MozconfigLoader(object):
+             # is now done cleanly and defensively enough to avoid
+             # losing data.
+             if isinstance(line, bytes):
+-                line = line.decode(encoding, errors='replace')
++                try:
++                    line = line.decode('utf-8')
++                except UnicodeDecodeError:
++                    line = line.decode(encoding, errors='replace')
+             elif not isinstance(line, str):
+                 line = str(line)
+ 
+diff --git a/testing/mozbase/mozprocess/mozprocess/processhandler.py b/testing/mozbase/mozprocess/mozprocess/processhandler.py
+index e4b6eb6e8a..d07518c6e5 100644
+--- a/testing/mozbase/mozprocess/mozprocess/processhandler.py
++++ b/testing/mozbase/mozprocess/mozprocess/processhandler.py
+@@ -17,6 +17,7 @@ import time
+ import traceback
+ from queue import Queue, Empty
+ from datetime import datetime
++from mozbuild.getencoding import getencoding
+ 
+ __all__ = ['ProcessHandlerMixin', 'ProcessHandler', 'LogOutput',
+            'StoreOutput', 'StreamOutput']
+@@ -96,7 +97,7 @@ class ProcessHandlerMixin(object):
+                      startupinfo=None,
+                      creationflags=0,
+                      ignore_children=False,
+-                     encoding='utf-8'):
++                     encoding=getencoding()):
+ 
+             # Parameter for whether or not we should attempt to track child processes
+             self._ignore_children = ignore_children
+@@ -126,7 +127,7 @@ class ProcessHandlerMixin(object):
+             }
+             if sys.version_info.minor >= 6 and universal_newlines:
+                 kwargs['universal_newlines'] = universal_newlines
+-                kwargs['encoding'] = encoding
++                kwargs['encoding'] = getencoding()
+ 
+             try:
+                 subprocess.Popen.__init__(self, args, **kwargs)
+@@ -135,13 +136,13 @@ class ProcessHandlerMixin(object):
+                 raise
+             if sys.version_info.minor <= 5 and universal_newlines:
+                 if self.stdin is not None:
+-                    self.stdin = io.TextIOWrapper(self.stdin, encoding=encoding)
++                    self.stdin = io.TextIOWrapper(self.stdin, encoding=getencoding())
+                 if self.stdout is not None:
+                     self.stdout = io.TextIOWrapper(self.stdout,
+-                                                   encoding=encoding)
++                                                   encoding=getencoding())
+                 if self.stderr is not None:
+                     self.stderr = io.TextIOWrapper(self.stderr,
+-                                                   encoding=encoding)
++                                                   encoding=getencoding())
+         def debug(self, msg):
+             if not MOZPROCESS_DEBUG:
+                 return
+@@ -673,6 +674,8 @@ falling back to not using job objects for managing child processes""", file=sys.
+                  onTimeout=(),
+                  onFinish=(),
+                  **kwargs):
++        raw = kwargs.pop("raw", False)
++
+         self.cmd = cmd
+         self.args = args
+         self.cwd = cwd
+@@ -708,7 +711,8 @@ falling back to not using job objects for managing child processes""", file=sys.
+         self.reader = ProcessReader(stdout_callback=processOutputLine,
+                                     stderr_callback=processStderrLine,
+                                     finished_callback=onFinish,
+-                                    timeout_callback=onTimeout)
++                                    timeout_callback=onTimeout,
++                                    raw=raw)
+ 
+         # It is common for people to pass in the entire array with the cmd and
+         # the args together since this is how Popen uses it.  Allow for that.
+@@ -912,7 +916,7 @@ class ProcessReader(object):
+ 
+     def __init__(self, stdout_callback=None, stderr_callback=None,
+                  finished_callback=None, timeout_callback=None,
+-                 timeout=None, output_timeout=None):
++                 timeout=None, output_timeout=None, raw=False):
+         self.stdout_callback = stdout_callback or (lambda line: True)
+         self.stderr_callback = stderr_callback or (lambda line: True)
+         self.finished_callback = finished_callback or (lambda: True)
+@@ -920,6 +924,7 @@ class ProcessReader(object):
+         self.timeout = timeout
+         self.output_timeout = output_timeout
+         self.thread = None
++        self.raw = raw
+ 
+     def _create_stream_reader(self, name, stream, queue, callback):
+         thread = threading.Thread(name=name,
+@@ -941,8 +946,11 @@ class ProcessReader(object):
+             if not raw:
+                 break
+ 
+-            line = raw.decode(locale.getpreferredencoding(False), errors='replace')
+-            queue.put((line, callback))
++            if self.raw:
++                queue.put((raw, callback))
++            else:
++                line = raw.decode(getencoding(), errors='replace')
++                queue.put((line, callback))
+         stream.close()
+ 
+     def start(self, proc):
+@@ -992,7 +1000,10 @@ class ProcessReader(object):
+             else:
+                 if output_timeout is not None:
+                     output_timeout = now + self.output_timeout
+-                callback(line.rstrip())
++                if self.raw:
++                    callback(line.rstrip(b"\r\n"))
++                else:
++                    callback(line.rstrip())
+             if timeout is not None and now > timeout:
+                 timed_out = True
+                 break
+@@ -1100,7 +1111,7 @@ class ProcessHandler(ProcessHandlerMixin):
+         if stream is True:
+             # Print to standard output only if no outputline provided
+             if kwargs.get('universal_newlines'):
+-                stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
++                stdout = codecs.getwriter(getencoding())(sys.stdout.buffer)
+             if not kwargs['processOutputLine']:
+                 kwargs['processOutputLine'].append(StreamOutput(sys.stdout,
+                                                                 kwargs.get('universal_newlines', False)))
