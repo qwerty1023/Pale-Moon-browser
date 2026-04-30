@@ -1,16 +1,40 @@
-# -*- coding: utf-8 -*-
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import absolute_import
+
 import ctypes
 import os
 import sys
-import io
 
 from mozprocess.processhandler import ProcessHandlerMixin
 from mozbuild.makeutil import Makefile
 from mozbuild.getencoding import getencoding
+
+def getenv_raw(name, default=None):
+
+    # Py3's os.environ.get uses _wgetenv on Windows, but Python is invoked via
+    # CreateProcessA by MSYS1, meaning non-ASCII variables are corrupted.
+    # Work around this by using ctypes and getting the bytes from Windows.
+    GetEnvironmentVariableA = ctypes.windll.kernel32.GetEnvironmentVariableA
+    # Tells Python to use uint32_t here (in Windows terms, a DWORD).
+    GetEnvironmentVariableA.restype = ctypes.c_uint32
+
+    # Allocate a string buffer.
+    buf = ctypes.create_string_buffer(32768)
+    # Call into GetEnvironmentVariableA.
+    ret = GetEnvironmentVariableA(name.encode('ascii'), buf, ctypes.sizeof(buf))
+
+    if ret == 0:
+        return default
+    return buf.value  # raw bytes
+
+# Get the UTF-8 bytes from the environment and decode them correctly.
+value_env = getenv_raw("CL_INCLUDES_PREFIX")
+decoded = value_env.decode('utf-8')
+# Re-encode them using the correct console output encoding.
+CL_INCLUDES_PREFIX = decoded.encode(getencoding())
 
 GetShortPathName = ctypes.windll.kernel32.GetShortPathNameW
 GetLongPathName = ctypes.windll.kernel32.GetLongPathNameW
@@ -117,20 +141,8 @@ def InvokeClWithDependencyGeneration(cmdline):
 
     return 0
 
-def main(argv):
-    import argparse
-
-    global CL_INCLUDES_PREFIX
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--includes-prefix')
-
-    args, rest = parser.parse_known_args(argv)
-
-    with open(args.includes_prefix, 'rb') as f:
-        CL_INCLUDES_PREFIX=f.read().rstrip(b'\n')
-
-    return InvokeClWithDependencyGeneration(rest)
+def main(args):
+    return InvokeClWithDependencyGeneration(args)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

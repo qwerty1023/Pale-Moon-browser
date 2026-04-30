@@ -8,7 +8,7 @@ def getencoding():
           codepage = ctypes.windll.kernel32.GetConsoleOutputCP()
           if codepage:
               encoding = "cp%d" % codepage
-          else: 
+          else:
               encoding = getpreferredencoding(False)
        except Exception:
           encoding = getpreferredencoding(False)

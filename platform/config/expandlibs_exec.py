@@ -37,7 +37,6 @@ import shutil
 import subprocess
 import re
 from mozbuild.makeutil import Makefile
-from mozbuild.getencoding import getencoding
 
 # The are the insert points for a GNU ld linker script, assuming a more
 # or less "standard" default linker script. This is not a dict because

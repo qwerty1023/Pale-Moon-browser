@@ -11,7 +11,6 @@ import os
 import re
 import sys
 import types
-import io
 from collections import OrderedDict
 from contextlib import contextmanager
 from functools import wraps
@@ -37,10 +36,10 @@ from mozbuild.util import (
     ReadOnlyDict,
     ReadOnlyNamespace,
 )
-from mozbuild.getencoding import getencoding
 
 import mozpack.path as mozpath
 
+from mozbuild.getencoding import getencoding
 
 class ConfigureError(Exception):
     pass

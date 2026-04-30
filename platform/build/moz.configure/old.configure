@@ -23,11 +23,10 @@ m4 = check_prog(
 @imports(_from='os.path', _import='getmtime')
 @imports(_from='os.path', _import='exists')
 @imports(_from='mozbuild.shellutil', _import='quote')
-@imports(_from='mozbuild.getencoding', _import='getencoding')
 @imports(_from='os', _import='environ')
+@imports(_from='mozbuild.getencoding', _import='getencoding')
 def prepare_configure(old_configure, mozconfig, awk, m4, build_env, shell,
                       old_configure_assignments, build_project):
-
     encoding = getencoding()
     # os.path.abspath in the sandbox will ensure forward slashes on Windows,
     # which is actually necessary because this path actually ends up literally
