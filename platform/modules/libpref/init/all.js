@@ -570,7 +570,7 @@ pref("media.mediasource.webm.enabled", true);
 pref("media.mediasource.webm.audio.enabled", true);
 
 #ifdef MOZ_AV1
-pref("media.av1.enabled", false);
+pref("media.av1.enabled", true);
 #endif
 
 // Use new MediaFormatReader architecture for plain ogg.
@@ -1305,9 +1305,6 @@ pref("javascript.options.dynamicImport", true);
 
 // Streams API
 pref("javascript.options.streams", true);
-
-// Enable garbage collection of weakrefed objects
-pref("javascript.options.weakrefs", false);
 
 // advanced prefs
 pref("advanced.mailftp",                    false);
