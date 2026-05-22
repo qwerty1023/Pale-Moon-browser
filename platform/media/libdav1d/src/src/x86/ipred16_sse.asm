@@ -81,7 +81,24 @@ pw_2048:  times 4 dw 2048
     %endrep
 %endmacro
 
-%if !ARCH_X86_64
+%define ipred_dc_splat_16bpc_ssse3_table (ipred_dc_16bpc_ssse3_table + 10*4)
+%define ipred_dc_128_16bpc_ssse3_table   (ipred_dc_16bpc_ssse3_table + 15*4)
+%define ipred_cfl_splat_16bpc_ssse3_table (ipred_cfl_16bpc_ssse3_table + 8*4)
+
+JMP_TABLE ipred_dc_left_16bpc,    ssse3, h4, h8, h16, h32, h64
+JMP_TABLE ipred_dc_16bpc,         ssse3, h4, h8, h16, h32, h64, w4, w8, w16, w32, w64, \
+                                         s4-10*4, s8-10*4, s16-10*4, s32-10*4, s64-10*4, \
+                                         s4-15*4, s8-15*4, s16c-15*4, s32c-15*4, s64-15*4
+JMP_TABLE ipred_h_16bpc,          ssse3, w4, w8, w16, w32, w64
+JMP_TABLE ipred_z1_16bpc,         ssse3, w4, w8, w16, w32, w64
+JMP_TABLE ipred_z2_16bpc,         ssse3, w4, w8, w16, w32, w64
+JMP_TABLE ipred_z3_16bpc,         ssse3, h4, h8, h16, h32, h64
+JMP_TABLE ipred_cfl_16bpc,        ssse3, h4, h8, h16, h32, w4, w8, w16, w32, \
+                                         s4-8*4, s8-8*4, s16-8*4, s32-8*4
+JMP_TABLE ipred_cfl_left_16bpc,   ssse3, h4, h8, h16, h32
+JMP_TABLE ipred_cfl_ac_444_16bpc, ssse3, w4, w8, w16, w32
+JMP_TABLE pal_pred_16bpc,         ssse3, w4, w8, w16, w32, w64
+
 %macro SMOOTH_WEIGHTS 1-*
 const smooth_weights_1d_16bpc ; sm_weights[] << 7
     %rep %0
@@ -111,28 +128,6 @@ SMOOTH_WEIGHTS   0,   0, 255, 128, 255, 149,  85,  64, \
                 38,  35,  32,  29,  27,  25,  22,  20, \
                 18,  16,  15,  13,  12,  10,   9,   8, \
                  7,   6,   6,   5,   5,   4,   4,   4
-%else
-cextern smooth_weights_1d_16bpc
-cextern smooth_weights_2d_16bpc
-%endif
-
-%define ipred_dc_splat_16bpc_ssse3_table (ipred_dc_16bpc_ssse3_table + 10*4)
-%define ipred_dc_128_16bpc_ssse3_table   (ipred_dc_16bpc_ssse3_table + 15*4)
-%define ipred_cfl_splat_16bpc_ssse3_table (ipred_cfl_16bpc_ssse3_table + 8*4)
-
-JMP_TABLE ipred_dc_left_16bpc,    ssse3, h4, h8, h16, h32, h64
-JMP_TABLE ipred_dc_16bpc,         ssse3, h4, h8, h16, h32, h64, w4, w8, w16, w32, w64, \
-                                         s4-10*4, s8-10*4, s16-10*4, s32-10*4, s64-10*4, \
-                                         s4-15*4, s8-15*4, s16c-15*4, s32c-15*4, s64-15*4
-JMP_TABLE ipred_h_16bpc,          ssse3, w4, w8, w16, w32, w64
-JMP_TABLE ipred_z1_16bpc,         ssse3, w4, w8, w16, w32, w64
-JMP_TABLE ipred_z2_16bpc,         ssse3, w4, w8, w16, w32, w64
-JMP_TABLE ipred_z3_16bpc,         ssse3, h4, h8, h16, h32, h64
-JMP_TABLE ipred_cfl_16bpc,        ssse3, h4, h8, h16, h32, w4, w8, w16, w32, \
-                                         s4-8*4, s8-8*4, s16-8*4, s32-8*4
-JMP_TABLE ipred_cfl_left_16bpc,   ssse3, h4, h8, h16, h32
-JMP_TABLE ipred_cfl_ac_444_16bpc, ssse3, w4, w8, w16, w32
-JMP_TABLE pal_pred_16bpc,         ssse3, w4, w8, w16, w32, w64
 
 cextern dr_intra_derivative
 cextern filter_intra_taps
