@@ -951,7 +951,7 @@ class GCRuntime
     void findZoneGroups(AutoLockForExclusiveAccess& lock);
     [[nodiscard]] bool findInterZoneEdges();
     void getNextZoneGroup();
-    void endMarkingZoneGroup(AutoLockForExclusiveAccess& lock);
+    void endMarkingZoneGroup();
     void beginSweepingZoneGroup(AutoLockForExclusiveAccess& lock);
     void sweepFinalizationRegistries();
     bool shouldReleaseObservedTypes();

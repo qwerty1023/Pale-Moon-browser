@@ -4373,7 +4373,7 @@ js::NotifyGCPostSwap(JSObject* a, JSObject* b, unsigned removedFlags)
 }
 
 void
-GCRuntime::endMarkingZoneGroup(AutoLockForExclusiveAccess& lock)
+GCRuntime::endMarkingZoneGroup()
 {
     gcstats::AutoPhase ap(stats, gcstats::PHASE_SWEEP_MARK);
 
@@ -4383,6 +4383,7 @@ GCRuntime::endMarkingZoneGroup(AutoLockForExclusiveAccess& lock)
      * black by the action of UnmarkGray.
      */
     MarkIncomingCrossCompartmentPointers(rt, BLACK);
+    markWeakReferencesInCurrentGroup(gcstats::PHASE_SWEEP_MARK_WEAK);
 
     /*
      * Change state of current group to MarkGray to restrict marking to this
@@ -4824,7 +4825,7 @@ GCRuntime::beginSweepPhase(bool destroyingRuntime, AutoLockForExclusiveAccess& l
     DropStringWrappers(rt);
 
     findZoneGroups(lock);
-    endMarkingZoneGroup(lock);
+    endMarkingZoneGroup();
     beginSweepingZoneGroup(lock);
 }
 
@@ -5058,7 +5059,7 @@ GCRuntime::performSweepActions(SliceBudget& budget, AutoLockForExclusiveAccess& 
         if (!currentZoneGroup)
             return Finished;
 
-        endMarkingZoneGroup(lock);
+        endMarkingZoneGroup();
         beginSweepingZoneGroup(lock);
     }
 }
