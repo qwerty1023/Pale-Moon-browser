@@ -145,6 +145,42 @@ class ReadableStreamBYOBRequest : public NativeObject
     static const Class protoClass_;
 };
 
+class WritableStream : public NativeObject
+{
+  public:
+    bool writable() const;
+    bool closed() const;
+    bool erroring() const;
+    bool errored() const;
+    bool locked() const;
+
+    static bool constructor(JSContext* cx, unsigned argc, Value* vp);
+    static const ClassSpec classSpec_;
+    static const Class class_;
+    static const ClassSpec protoClassSpec_;
+    static const Class protoClass_;
+};
+
+class WritableStreamDefaultWriter : public NativeObject
+{
+  public:
+    static bool constructor(JSContext* cx, unsigned argc, Value* vp);
+    static const ClassSpec classSpec_;
+    static const Class class_;
+    static const ClassSpec protoClassSpec_;
+    static const Class protoClass_;
+};
+
+class WritableStreamDefaultController : public NativeObject
+{
+  public:
+    static bool constructor(JSContext* cx, unsigned argc, Value* vp);
+    static const ClassSpec classSpec_;
+    static const Class class_;
+    static const ClassSpec protoClassSpec_;
+    static const Class protoClass_;
+};
+
 class ByteLengthQueuingStrategy : public NativeObject
 {
   public:

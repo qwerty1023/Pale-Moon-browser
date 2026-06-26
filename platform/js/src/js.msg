@@ -655,6 +655,16 @@ MSG_DEF(JSMSG_READABLESTREAMBYOBREQUEST_NO_CONTROLLER,   1, JSEXN_TYPEERR, "Read
 MSG_DEF(JSMSG_READABLESTREAMBYOBREQUEST_RESPOND_CLOSED,  0, JSEXN_TYPEERR, "ReadableStreamBYOBRequest method 'respond' called with non-zero number of bytes with a closed controller.")
 MSG_DEF(JSMSG_READABLESTREAM_METHOD_NOT_IMPLEMENTED,     1, JSEXN_TYPEERR, "ReadableStream method {0} not yet implemented")
 
+// WritableStream
+MSG_DEF(JSMSG_WRITABLESTREAM_LOCKED,                     0, JSEXN_TYPEERR, "A Writer may only be created for an unlocked WritableStream.")
+MSG_DEF(JSMSG_WRITABLESTREAM_NOT_WRITABLE,               1, JSEXN_TYPEERR, "'{0}' may only be called on a writable stream.")
+MSG_DEF(JSMSG_WRITABLESTREAM_NOT_OWNED,                  1, JSEXN_TYPEERR, "The WritableStream writer method '{0}' may only be called on a writer owned by a stream.")
+MSG_DEF(JSMSG_WRITABLESTREAM_CLOSING_OR_CLOSED,          1, JSEXN_TYPEERR, "WritableStream method '{0}' called on a closing or closed stream.")
+MSG_DEF(JSMSG_WRITABLESTREAM_UNDERLYINGSINK_TYPE_WRONG,  0, JSEXN_RANGEERR, "'underlyingSink.type' must be undefined.")
+MSG_DEF(JSMSG_WRITABLESTREAM_CONTROLLER_SET,             0, JSEXN_TYPEERR, "The WritableStream already has a controller defined.")
+MSG_DEF(JSMSG_WRITABLESTREAM_RELEASED,                   0, JSEXN_TYPEERR, "The WritableStream writer was released.")
+MSG_DEF(JSMSG_WRITABLESTREAM_CLOSE_QUEUED,               0, JSEXN_TYPEERR, "The WritableStream is already closing.")
+
 // Other Stream-related
 MSG_DEF(JSMSG_STREAM_INVALID_HIGHWATERMARK,             0, JSEXN_RANGEERR, "'highWaterMark' must be a non-negative, non-NaN number.")
 

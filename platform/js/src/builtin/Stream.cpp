@@ -10,6 +10,7 @@
 #include "jscntxt.h"
 
 #include "gc/Heap.h"
+#include "vm/GlobalObject.h"
 #include "vm/SelfHosting.h"
 
 #include "jsobjinlines.h"
@@ -36,6 +37,34 @@ enum ReaderSlots {
 enum ReaderType {
     ReaderType_Default,
     ReaderType_BYOB
+};
+
+enum WritableStreamSlots {
+    WritableStreamSlot_Controller,
+    WritableStreamSlot_Writer,
+    WritableStreamSlot_State,
+    WritableStreamSlot_StoredError,
+    WritableStreamSlot_WriteRequests,
+    WritableStreamSlot_InFlightWriteRequest,
+    WritableStreamSlot_CloseRequest,
+    WritableStreamSlot_InFlightCloseRequest,
+    WritableStreamSlot_PendingAbortRequest,
+    WritableStreamSlot_Backpressure,
+    WritableStreamSlotCount
+};
+
+enum WritableStreamState {
+    WritableStream_Writable,
+    WritableStream_Closed,
+    WritableStream_Erroring,
+    WritableStream_Errored
+};
+
+enum WritableWriterSlots {
+    WritableWriterSlot_Stream,
+    WritableWriterSlot_ClosedPromise,
+    WritableWriterSlot_ReadyPromise,
+    WritableWriterSlotCount
 };
 
 // ReadableStreamDefaultController and ReadableByteStreamController are both
@@ -66,6 +95,19 @@ enum ByteControllerSlots {
     ByteControllerSlot_PendingPullIntos,
     ByteControllerSlot_AutoAllocateSize,
     ByteControllerSlotCount
+};
+
+enum WritableControllerSlots {
+    WritableControllerSlot_Stream = QueueContainerSlotCount,
+    WritableControllerSlot_UnderlyingSink,
+    WritableControllerSlot_StrategySize,
+    WritableControllerSlot_StrategyHWM,
+    WritableControllerSlot_Flags,
+    WritableControllerSlotCount
+};
+
+enum WritableControllerFlags {
+    WritableControllerFlag_Started = 1 << 0,
 };
 
 enum ControllerFlags {
@@ -102,6 +144,13 @@ IsReadableStreamController(const JSObject* controller)
 {
     return controller->is<ReadableStreamDefaultController>() ||
            controller->is<ReadableByteStreamController>();
+}
+
+static bool
+IsQueueContainer(const JSObject* container)
+{
+    return IsReadableStreamController(container) ||
+           container->is<WritableStreamDefaultController>();
 }
 #endif // DEBUG
 
@@ -164,6 +213,42 @@ bool
 ReadableStream::disturbed() const
 {
     return StreamState(this) & Disturbed;
+}
+
+static inline WritableStreamState
+WritableState(const WritableStream* stream)
+{
+    return static_cast<WritableStreamState>(stream->getFixedSlot(WritableStreamSlot_State).toInt32());
+}
+
+static inline void
+SetWritableState(WritableStream* stream, WritableStreamState state)
+{
+    stream->setFixedSlot(WritableStreamSlot_State, Int32Value(state));
+}
+
+bool
+WritableStream::writable() const
+{
+    return WritableState(this) == WritableStream_Writable;
+}
+
+bool
+WritableStream::closed() const
+{
+    return WritableState(this) == WritableStream_Closed;
+}
+
+bool
+WritableStream::erroring() const
+{
+    return WritableState(this) == WritableStream_Erroring;
+}
+
+bool
+WritableStream::errored() const
+{
+    return WritableState(this) == WritableStream_Errored;
 }
 
 inline static bool
@@ -232,6 +317,44 @@ HasReader(const ReadableStream* stream)
     return !stream->getFixedSlot(StreamSlot_Reader).isUndefined();
 }
 
+[[nodiscard]] inline static WritableStream*
+StreamFromWriter(const NativeObject* writer)
+{
+    return &writer->getFixedSlot(WritableWriterSlot_Stream).toObject().as<WritableStream>();
+}
+
+[[nodiscard]] inline static WritableStreamDefaultController*
+WritableControllerFromStream(const WritableStream* stream)
+{
+    Value controllerVal = stream->getFixedSlot(WritableStreamSlot_Controller);
+    return &controllerVal.toObject().as<WritableStreamDefaultController>();
+}
+
+inline static bool
+HasWriter(const WritableStream* stream)
+{
+    return !stream->getFixedSlot(WritableStreamSlot_Writer).isUndefined();
+}
+
+bool
+WritableStream::locked() const
+{
+    return HasWriter(this);
+}
+
+static inline uint32_t
+WritableControllerFlags(const WritableStreamDefaultController* controller)
+{
+    return controller->getFixedSlot(WritableControllerSlot_Flags).toInt32();
+}
+
+static inline void
+AddWritableControllerFlags(WritableStreamDefaultController* controller, uint32_t flags)
+{
+    controller->setFixedSlot(WritableControllerSlot_Flags,
+                             Int32Value(WritableControllerFlags(controller) | flags));
+}
+
 [[nodiscard]] inline static JSFunction*
 NewHandler(JSContext *cx, Native handler, HandleObject target)
 {
@@ -254,6 +377,17 @@ TargetFromHandler(JSObject& handler)
 
 [[nodiscard]] inline static bool
 ResetQueue(JSContext* cx, HandleNativeObject container);
+
+[[nodiscard]] inline static bool
+DequeueValue(JSContext* cx, HandleNativeObject container, MutableHandleValue chunk);
+
+[[nodiscard]] static bool
+EnqueueValueWithSize(JSContext* cx, HandleNativeObject container, HandleValue value,
+                     HandleValue sizeVal);
+
+[[nodiscard]] static bool
+ValidateAndNormalizeQueuingStrategy(JSContext* cx, HandleValue size,
+                                    HandleValue highWaterMarkVal, double* highWaterMark);
 
 [[nodiscard]] inline static bool
 InvokeOrNoop(JSContext* cx, HandleValue O, HandlePropertyName P, HandleValue arg,
@@ -304,6 +438,12 @@ RejectNonGenericMethod(JSContext* cx, const CallArgs& args,
 
     return ReturnPromiseRejectedWithPendingError(cx, args);
 }
+
+static bool
+ReadableStreamAsyncIterator_next(JSContext* cx, unsigned argc, Value* vp);
+
+static bool
+ReadableStreamAsyncIterator_return(JSContext* cx, unsigned argc, Value* vp);
 
 [[nodiscard]] inline static NativeObject*
 SetNewList(JSContext* cx, HandleNativeObject container, uint32_t slot)
@@ -483,6 +623,83 @@ const Class QueueEntry::class_ = {
     JSCLASS_HAS_RESERVED_SLOTS(SlotCount)
 };
 
+class WritableStreamWriteRecord : public NativeObject
+{
+  private:
+    enum Slots {
+        Slot_Chunk = 0,
+        SlotCount
+    };
+
+  public:
+    static const Class class_;
+
+    Value chunk() { return getFixedSlot(Slot_Chunk); }
+
+    static WritableStreamWriteRecord* create(JSContext* cx, HandleValue chunk)
+    {
+        Rooted<WritableStreamWriteRecord*> record(cx);
+        record = NewObjectWithClassProto<WritableStreamWriteRecord>(cx);
+        if (!record)
+            return nullptr;
+
+        record->setFixedSlot(Slot_Chunk, chunk);
+        return record;
+    }
+};
+
+const Class WritableStreamWriteRecord::class_ = {
+    "WritableStreamWriteRecord",
+    JSCLASS_HAS_RESERVED_SLOTS(SlotCount)
+};
+
+class WritableStreamPendingAbortRequest : public NativeObject
+{
+  private:
+    enum Slots {
+        Slot_Stream = 0,
+        Slot_Promise,
+        Slot_Reason,
+        Slot_WasAlreadyErroring,
+        SlotCount
+    };
+
+  public:
+    static const Class class_;
+
+    WritableStream* stream() {
+        return &getFixedSlot(Slot_Stream).toObject().as<WritableStream>();
+    }
+    PromiseObject* promise() {
+        return &getFixedSlot(Slot_Promise).toObject().as<PromiseObject>();
+    }
+    Value reason() { return getFixedSlot(Slot_Reason); }
+    bool wasAlreadyErroring() { return getFixedSlot(Slot_WasAlreadyErroring).toBoolean(); }
+
+    static WritableStreamPendingAbortRequest* create(JSContext* cx,
+                                                     Handle<WritableStream*> stream,
+                                                     Handle<PromiseObject*> promise,
+                                                     HandleValue reason,
+                                                     bool wasAlreadyErroring)
+    {
+        Rooted<WritableStreamPendingAbortRequest*> request(cx);
+        request = NewObjectWithClassProto<WritableStreamPendingAbortRequest>(cx);
+        if (!request)
+            return nullptr;
+
+        request->setFixedSlot(Slot_Stream, ObjectValue(*stream));
+        request->setFixedSlot(Slot_Promise, ObjectValue(*promise));
+        request->setFixedSlot(Slot_Reason, reason);
+        request->setFixedSlot(Slot_WasAlreadyErroring, BooleanValue(wasAlreadyErroring));
+        return request;
+    }
+};
+
+const Class WritableStreamPendingAbortRequest::class_ = {
+    "WritableStreamPendingAbortRequest",
+    JSCLASS_HAS_RESERVED_SLOTS(SlotCount)
+};
+
 class TeeState : public NativeObject
 {
   private:
@@ -598,6 +815,285 @@ class TeeState : public NativeObject
 const Class TeeState::class_ = {
     "TeeState",
     JSCLASS_HAS_RESERVED_SLOTS(SlotCount)
+};
+
+class ReadableStreamAsyncIterator : public NativeObject
+{
+  private:
+    enum Slots {
+        Slot_Reader = 0,
+        Slot_PreventCancel,
+        Slot_Done,
+        Slot_OngoingPromise,
+        SlotCount
+    };
+
+  public:
+    static const Class class_;
+
+    bool hasReader() const { return !getFixedSlot(Slot_Reader).isUndefined(); }
+    ReadableStreamDefaultReader* reader() {
+        return &getFixedSlot(Slot_Reader).toObject().as<ReadableStreamDefaultReader>();
+    }
+    void clearReader() { setFixedSlot(Slot_Reader, UndefinedValue()); }
+
+    bool preventCancel() const { return getFixedSlot(Slot_PreventCancel).toBoolean(); }
+    bool done() const { return getFixedSlot(Slot_Done).toBoolean(); }
+    void setDone() { setFixedSlot(Slot_Done, BooleanValue(true)); }
+
+    PromiseObject* ongoingPromise() {
+        return &getFixedSlot(Slot_OngoingPromise).toObject().as<PromiseObject>();
+    }
+    bool hasPendingOperation() {
+        if (getFixedSlot(Slot_OngoingPromise).isUndefined())
+            return false;
+
+        PromiseObject* promise = ongoingPromise();
+        if (promise->state() == JS::PromiseState::Pending)
+            return true;
+
+        setFixedSlot(Slot_OngoingPromise, UndefinedValue());
+        return false;
+    }
+    void setOngoingPromise(HandleObject promise) {
+        MOZ_ASSERT(promise->is<PromiseObject>());
+        setFixedSlot(Slot_OngoingPromise, ObjectValue(*promise));
+    }
+
+    static ReadableStreamAsyncIterator*
+    create(JSContext* cx, Handle<ReadableStreamDefaultReader*> reader, bool preventCancel)
+    {
+        RootedObject proto(cx);
+        proto = GlobalObject::getOrCreateReadableStreamAsyncIteratorPrototype(cx, cx->global());
+        if (!proto)
+            return nullptr;
+
+        RootedObject obj(cx, NewNativeObjectWithGivenProto(cx, &class_, proto));
+        if (!obj)
+            return nullptr;
+
+        Handle<ReadableStreamAsyncIterator*> iterator = obj.as<ReadableStreamAsyncIterator>();
+        iterator->setFixedSlot(Slot_Reader, ObjectValue(*reader));
+        iterator->setFixedSlot(Slot_PreventCancel, BooleanValue(preventCancel));
+        iterator->setFixedSlot(Slot_Done, BooleanValue(false));
+        iterator->setFixedSlot(Slot_OngoingPromise, UndefinedValue());
+        return iterator;
+    }
+};
+
+const Class ReadableStreamAsyncIterator::class_ = {
+    "ReadableStreamAsyncIterator",
+    JSCLASS_HAS_RESERVED_SLOTS(SlotCount)
+};
+
+class ReadableStreamAsyncIteratorRequest : public NativeObject
+{
+  public:
+    enum Kind {
+        Kind_Next,
+        Kind_Return
+    };
+
+  private:
+    enum Slots {
+        Slot_Iterator = 0,
+        Slot_Kind,
+        Slot_Value,
+        SlotCount
+    };
+
+  public:
+    static const Class class_;
+
+    ReadableStreamAsyncIterator* iterator() {
+        return &getFixedSlot(Slot_Iterator).toObject().as<ReadableStreamAsyncIterator>();
+    }
+    Kind kind() const { return static_cast<Kind>(getFixedSlot(Slot_Kind).toInt32()); }
+    Value value() const { return getFixedSlot(Slot_Value); }
+
+    static ReadableStreamAsyncIteratorRequest*
+    create(JSContext* cx, Handle<ReadableStreamAsyncIterator*> iterator, Kind kind,
+           HandleValue value)
+    {
+        Rooted<ReadableStreamAsyncIteratorRequest*> request(cx);
+        request = NewObjectWithClassProto<ReadableStreamAsyncIteratorRequest>(cx);
+        if (!request)
+            return nullptr;
+
+        request->setFixedSlot(Slot_Iterator, ObjectValue(*iterator));
+        request->setFixedSlot(Slot_Kind, Int32Value(kind));
+        request->setFixedSlot(Slot_Value, value);
+        return request;
+    }
+};
+
+const Class ReadableStreamAsyncIteratorRequest::class_ = {
+    "ReadableStreamAsyncIteratorRequest",
+    JSCLASS_HAS_RESERVED_SLOTS(SlotCount)
+};
+
+static const JSFunctionSpec ReadableStreamAsyncIterator_methods[] = {
+    JS_FN("next",   ReadableStreamAsyncIterator_next,   0, JSPROP_ENUMERATE),
+    JS_FN("return", ReadableStreamAsyncIterator_return, 1, JSPROP_ENUMERATE),
+    JS_FS_END
+};
+
+/* static */ NativeObject*
+GlobalObject::getOrCreateReadableStreamAsyncIteratorPrototype(JSContext* cx,
+                                                              Handle<GlobalObject*> global)
+{
+    Value protoVal = global->getReservedSlot(READABLE_STREAM_ASYNC_ITERATOR_PROTO);
+    if (protoVal.isObject())
+        return &protoVal.toObject().as<NativeObject>();
+
+    RootedObject asyncIteratorProto(cx, getOrCreateAsyncIteratorPrototype(cx, global));
+    if (!asyncIteratorProto)
+        return nullptr;
+
+    RootedNativeObject proto(cx);
+    proto = createBlankPrototypeInheriting(cx, global, &PlainObject::class_, asyncIteratorProto);
+    if (!proto)
+        return nullptr;
+
+    if (!DefinePropertiesAndFunctions(cx, proto, nullptr, ReadableStreamAsyncIterator_methods))
+        return nullptr;
+
+    global->setReservedSlot(READABLE_STREAM_ASYNC_ITERATOR_PROTO, ObjectValue(*proto));
+    return proto;
+}
+
+class PipeToState : public NativeObject
+{
+  public:
+    enum Slots {
+        Slot_Flags = 0,
+        Slot_Source,
+        Slot_Dest,
+        Slot_Reader,
+        Slot_Writer,
+        Slot_Promise,
+        Slot_StoredError,
+        Slot_Signal,
+        Slot_AbortAlgorithm,
+        Slot_PendingAction,
+        Slot_PendingWrites,
+        SlotCount
+    };
+
+  private:
+    enum Flags {
+        Flag_PreventClose = 1 << 0,
+        Flag_PreventAbort = 1 << 1,
+        Flag_PreventCancel = 1 << 2,
+        Flag_ShuttingDown = 1 << 3,
+        Flag_Reading = 1 << 4,
+        Flag_HasError = 1 << 5,
+    };
+
+  public:
+    enum PendingAction {
+        Action_None,
+        Action_AbortDest,
+        Action_CancelSource,
+        Action_CloseDest
+    };
+
+    static const Class class_;
+
+    uint32_t flags() const { return getFixedSlot(Slot_Flags).toInt32(); }
+    void setFlags(uint32_t flags) { setFixedSlot(Slot_Flags, Int32Value(flags)); }
+    bool preventClose() const { return flags() & Flag_PreventClose; }
+    bool preventAbort() const { return flags() & Flag_PreventAbort; }
+    bool preventCancel() const { return flags() & Flag_PreventCancel; }
+    bool shuttingDown() const { return flags() & Flag_ShuttingDown; }
+    bool reading() const { return flags() & Flag_Reading; }
+    bool hasError() const { return flags() & Flag_HasError; }
+    void setShuttingDown() { setFlags(flags() | Flag_ShuttingDown); }
+    void setReading() { setFlags(flags() | Flag_Reading); }
+    void clearReading() { setFlags(flags() & ~Flag_Reading); }
+    void setError(HandleValue error) {
+        setFixedSlot(Slot_StoredError, error);
+        setFlags(flags() | Flag_HasError);
+    }
+
+    ReadableStream* source() {
+        return &getFixedSlot(Slot_Source).toObject().as<ReadableStream>();
+    }
+    WritableStream* dest() {
+        return &getFixedSlot(Slot_Dest).toObject().as<WritableStream>();
+    }
+    ReadableStreamDefaultReader* reader() {
+        return &getFixedSlot(Slot_Reader).toObject().as<ReadableStreamDefaultReader>();
+    }
+    WritableStreamDefaultWriter* writer() {
+        return &getFixedSlot(Slot_Writer).toObject().as<WritableStreamDefaultWriter>();
+    }
+    PromiseObject* promise() {
+        return &getFixedSlot(Slot_Promise).toObject().as<PromiseObject>();
+    }
+    Value storedError() const { return getFixedSlot(Slot_StoredError); }
+    Value signal() const { return getFixedSlot(Slot_Signal); }
+    Value abortAlgorithm() const { return getFixedSlot(Slot_AbortAlgorithm); }
+    void setAbortAlgorithm(HandleObject handler) {
+        setFixedSlot(Slot_AbortAlgorithm, ObjectValue(*handler));
+    }
+    PendingAction pendingAction() const {
+        return static_cast<PendingAction>(getFixedSlot(Slot_PendingAction).toInt32());
+    }
+    void setPendingAction(PendingAction action) {
+        setFixedSlot(Slot_PendingAction, Int32Value(action));
+    }
+    uint32_t pendingWrites() const {
+        return getFixedSlot(Slot_PendingWrites).toInt32();
+    }
+    void addPendingWrite() {
+        setFixedSlot(Slot_PendingWrites, Int32Value(pendingWrites() + 1));
+    }
+    void finishPendingWrite() {
+        MOZ_ASSERT(pendingWrites() > 0);
+        setFixedSlot(Slot_PendingWrites, Int32Value(pendingWrites() - 1));
+    }
+
+    static PipeToState* create(JSContext* cx, Handle<ReadableStream*> source,
+                               Handle<WritableStream*> dest, HandleObject reader,
+                               HandleObject writer, bool preventClose,
+                               bool preventAbort, bool preventCancel,
+                               HandleValue signal)
+    {
+        Rooted<PipeToState*> state(cx, NewObjectWithClassProto<PipeToState>(cx));
+        if (!state)
+            return nullptr;
+
+        Rooted<PromiseObject*> promise(cx, PromiseObject::createSkippingExecutor(cx));
+        if (!promise)
+            return nullptr;
+
+        uint32_t flags = 0;
+        if (preventClose)
+            flags |= Flag_PreventClose;
+        if (preventAbort)
+            flags |= Flag_PreventAbort;
+        if (preventCancel)
+            flags |= Flag_PreventCancel;
+
+        state->setFixedSlot(Slot_Flags, Int32Value(flags));
+        state->setFixedSlot(Slot_Source, ObjectValue(*source));
+        state->setFixedSlot(Slot_Dest, ObjectValue(*dest));
+        state->setFixedSlot(Slot_Reader, ObjectValue(*reader));
+        state->setFixedSlot(Slot_Writer, ObjectValue(*writer));
+        state->setFixedSlot(Slot_Promise, ObjectValue(*promise));
+        state->setFixedSlot(Slot_StoredError, UndefinedValue());
+        state->setFixedSlot(Slot_Signal, signal);
+        state->setFixedSlot(Slot_AbortAlgorithm, UndefinedValue());
+        state->setFixedSlot(Slot_PendingAction, Int32Value(Action_None));
+        state->setFixedSlot(Slot_PendingWrites, Int32Value(0));
+        return state;
+    }
+};
+
+const Class PipeToState::class_ = {
+    "PipeToState",
+    JSCLASS_HAS_RESERVED_SLOTS(PipeToState::SlotCount)
 };
 
 #define CLASS_SPEC(cls, nCtorArgs, nSlots, specFlags, classFlags, classOps) \
@@ -862,6 +1358,23 @@ CreateReadableStreamDefaultReader(JSContext* cx, Handle<ReadableStream*> stream)
 [[nodiscard]] static ReadableStreamBYOBReader*
 CreateReadableStreamBYOBReader(JSContext* cx, Handle<ReadableStream*> stream);
 
+[[nodiscard]] static JSObject*
+ReadableStreamReaderGenericCancel(JSContext* cx, HandleNativeObject reader, HandleValue reason);
+
+[[nodiscard]] static bool
+ReadableStreamReaderGenericRelease(JSContext* cx, HandleNativeObject reader);
+
+[[nodiscard]] static WritableStreamDefaultWriter*
+CreateWritableStreamDefaultWriter(JSContext* cx, Handle<WritableStream*> stream);
+
+static bool
+ReturnUndefined(JSContext* cx, unsigned argc, Value* vp);
+
+[[nodiscard]] static JSObject*
+ReadableStreamPipeTo(JSContext* cx, Handle<ReadableStream*> source, Handle<WritableStream*> dest,
+                     bool preventClose, bool preventAbort, bool preventCancel,
+                     HandleValue signal);
+
 // Streams spec, 3.2.4.3. getReader()
 [[nodiscard]] static bool
 ReadableStream_getReader_impl(JSContext* cx, const CallArgs& args)
@@ -915,27 +1428,447 @@ ReadableStream_getReader(JSContext* cx, unsigned argc, Value* vp)
     return CallNonGenericMethod<Is<ReadableStream>, ReadableStream_getReader_impl>(cx, args);
 }
 
+[[nodiscard]] static JSObject*
+ReadableStreamAsyncIteratorResultPromise(JSContext* cx, HandleValue value, bool done)
+{
+    RootedObject result(cx, CreateIterResultObject(cx, value, done));
+    if (!result)
+        return nullptr;
+
+    RootedValue resultVal(cx, ObjectValue(*result));
+    return PromiseObject::unforgeableResolve(cx, resultVal);
+}
+
+[[nodiscard]] static bool
+ReadableStreamAsyncIteratorReleaseReader(JSContext* cx,
+                                         Handle<ReadableStreamAsyncIterator*> iterator)
+{
+    if (!iterator->hasReader())
+        return true;
+
+    Rooted<ReadableStreamDefaultReader*> reader(cx, iterator->reader());
+    if (!ReadableStreamReaderGenericRelease(cx, reader))
+        return false;
+
+    iterator->clearReader();
+    return true;
+}
+
+static bool
+ReadableStreamAsyncIteratorReadFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<ReadableStreamAsyncIterator*> iterator(cx);
+    iterator = TargetFromHandler<ReadableStreamAsyncIterator>(args.callee());
+
+    RootedValue resultVal(cx, args.get(0));
+    if (!resultVal.isObject()) {
+        JS_ReportErrorASCII(cx, "ReadableStream reader returned a non-object result");
+        return false;
+    }
+
+    RootedObject result(cx, &resultVal.toObject());
+    RootedValue doneVal(cx);
+    if (!GetProperty(cx, result, result, cx->names().done, &doneVal))
+        return false;
+
+    if (ToBoolean(doneVal)) {
+        iterator->setDone();
+        if (!ReadableStreamAsyncIteratorReleaseReader(cx, iterator))
+            return false;
+    }
+
+    args.rval().set(resultVal);
+    return true;
+}
+
+static bool
+ReadableStreamAsyncIteratorReadRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<ReadableStreamAsyncIterator*> iterator(cx);
+    iterator = TargetFromHandler<ReadableStreamAsyncIterator>(args.callee());
+
+    RootedValue error(cx, args.get(0));
+    iterator->setDone();
+    if (!ReadableStreamAsyncIteratorReleaseReader(cx, iterator))
+        return false;
+
+    JS_SetPendingException(cx, error);
+    return false;
+}
+
+[[nodiscard]] static JSObject*
+ReadableStreamAsyncIteratorPerformNext(JSContext* cx,
+                                       Handle<ReadableStreamAsyncIterator*> iterator)
+{
+    if (iterator->done() || !iterator->hasReader())
+        return ReadableStreamAsyncIteratorResultPromise(cx, UndefinedHandleValue, true);
+
+    Rooted<ReadableStreamDefaultReader*> reader(cx, iterator->reader());
+    RootedObject readPromise(cx, ReadableStreamDefaultReader::read(cx, reader));
+    if (!readPromise)
+        return nullptr;
+
+    RootedObject onFulfilled(cx);
+    onFulfilled = NewHandler(cx, ReadableStreamAsyncIteratorReadFulfilledHandler, iterator);
+    if (!onFulfilled)
+        return nullptr;
+
+    RootedObject onRejected(cx);
+    onRejected = NewHandler(cx, ReadableStreamAsyncIteratorReadRejectedHandler, iterator);
+    if (!onRejected)
+        return nullptr;
+
+    return JS::CallOriginalPromiseThen(cx, readPromise, onFulfilled, onRejected);
+}
+
+static bool
+ReadableStreamAsyncIteratorReturnFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<ReadableStreamAsyncIteratorRequest*> request(cx);
+    request = TargetFromHandler<ReadableStreamAsyncIteratorRequest>(args.callee());
+
+    RootedValue value(cx, request->value());
+    RootedObject result(cx, CreateIterResultObject(cx, value, true));
+    if (!result)
+        return false;
+
+    args.rval().setObject(*result);
+    return true;
+}
+
+[[nodiscard]] static JSObject*
+ReadableStreamAsyncIteratorPerformReturn(JSContext* cx,
+                                         Handle<ReadableStreamAsyncIterator*> iterator,
+                                         HandleValue value)
+{
+    if (iterator->done() || !iterator->hasReader())
+        return ReadableStreamAsyncIteratorResultPromise(cx, value, true);
+
+    iterator->setDone();
+
+    Rooted<ReadableStreamDefaultReader*> reader(cx, iterator->reader());
+    RootedObject cancelPromise(cx);
+    if (!iterator->preventCancel()) {
+        cancelPromise = ReadableStreamReaderGenericCancel(cx, reader, value);
+        if (!cancelPromise)
+            return nullptr;
+    }
+
+    if (!ReadableStreamAsyncIteratorReleaseReader(cx, iterator))
+        return nullptr;
+
+    if (iterator->preventCancel())
+        return ReadableStreamAsyncIteratorResultPromise(cx, value, true);
+
+    Rooted<ReadableStreamAsyncIteratorRequest*> request(cx);
+    request = ReadableStreamAsyncIteratorRequest::create(cx, iterator,
+                                                         ReadableStreamAsyncIteratorRequest::Kind_Return,
+                                                         value);
+    if (!request)
+        return nullptr;
+
+    RootedObject onFulfilled(cx);
+    onFulfilled = NewHandler(cx, ReadableStreamAsyncIteratorReturnFulfilledHandler, request);
+    if (!onFulfilled)
+        return nullptr;
+
+    return JS::CallOriginalPromiseThen(cx, cancelPromise, onFulfilled, nullptr);
+}
+
+static bool
+ReadableStreamAsyncIteratorOperationHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<ReadableStreamAsyncIteratorRequest*> request(cx);
+    request = TargetFromHandler<ReadableStreamAsyncIteratorRequest>(args.callee());
+
+    Rooted<ReadableStreamAsyncIterator*> iterator(cx, request->iterator());
+    RootedValue value(cx, request->value());
+    RootedObject promise(cx);
+    if (request->kind() == ReadableStreamAsyncIteratorRequest::Kind_Next)
+        promise = ReadableStreamAsyncIteratorPerformNext(cx, iterator);
+    else
+        promise = ReadableStreamAsyncIteratorPerformReturn(cx, iterator, value);
+    if (!promise)
+        return false;
+
+    args.rval().setObject(*promise);
+    return true;
+}
+
+[[nodiscard]] static JSObject*
+ReadableStreamAsyncIteratorEnqueueOperation(JSContext* cx,
+                                            Handle<ReadableStreamAsyncIterator*> iterator,
+                                            ReadableStreamAsyncIteratorRequest::Kind kind,
+                                            HandleValue value)
+{
+    if (!iterator->hasPendingOperation()) {
+        RootedObject promise(cx);
+        if (kind == ReadableStreamAsyncIteratorRequest::Kind_Next)
+            promise = ReadableStreamAsyncIteratorPerformNext(cx, iterator);
+        else
+            promise = ReadableStreamAsyncIteratorPerformReturn(cx, iterator, value);
+        if (!promise)
+            return nullptr;
+
+        iterator->setOngoingPromise(promise);
+        return promise;
+    }
+
+    Rooted<ReadableStreamAsyncIteratorRequest*> request(cx);
+    request = ReadableStreamAsyncIteratorRequest::create(cx, iterator, kind, value);
+    if (!request)
+        return nullptr;
+
+    RootedObject onSettled(cx);
+    onSettled = NewHandler(cx, ReadableStreamAsyncIteratorOperationHandler, request);
+    if (!onSettled)
+        return nullptr;
+
+    RootedObject ongoingPromise(cx, iterator->ongoingPromise());
+    RootedObject promise(cx);
+    promise = JS::CallOriginalPromiseThen(cx, ongoingPromise, onSettled, onSettled);
+    if (!promise)
+        return nullptr;
+
+    iterator->setOngoingPromise(promise);
+    return promise;
+}
+
+static bool
+ReadableStreamAsyncIterator_next(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<ReadableStreamAsyncIterator>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "ReadableStreamAsyncIterator", "next");
+
+    Rooted<ReadableStreamAsyncIterator*> iterator(cx);
+    iterator = &args.thisv().toObject().as<ReadableStreamAsyncIterator>();
+    RootedObject promise(cx);
+    promise = ReadableStreamAsyncIteratorEnqueueOperation(cx, iterator,
+                                                          ReadableStreamAsyncIteratorRequest::Kind_Next,
+                                                          UndefinedHandleValue);
+    if (!promise)
+        return false;
+
+    args.rval().setObject(*promise);
+    return true;
+}
+
+static bool
+ReadableStreamAsyncIterator_return(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<ReadableStreamAsyncIterator>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "ReadableStreamAsyncIterator", "return");
+
+    Rooted<ReadableStreamAsyncIterator*> iterator(cx);
+    iterator = &args.thisv().toObject().as<ReadableStreamAsyncIterator>();
+    RootedValue value(cx, args.get(0));
+    RootedObject promise(cx);
+    promise = ReadableStreamAsyncIteratorEnqueueOperation(cx, iterator,
+                                                          ReadableStreamAsyncIteratorRequest::Kind_Return,
+                                                          value);
+    if (!promise)
+        return false;
+
+    args.rval().setObject(*promise);
+    return true;
+}
+
+// Streams spec, 4.2.5. Asynchronous iteration
+[[nodiscard]] static bool
+ReadableStream_values_impl(JSContext* cx, const CallArgs& args)
+{
+    Rooted<ReadableStream*> stream(cx, &args.thisv().toObject().as<ReadableStream>());
+
+    bool preventCancel = false;
+    HandleValue optionsVal = args.get(0);
+    if (!optionsVal.isUndefined()) {
+        RootedValue option(cx);
+        if (!GetProperty(cx, optionsVal, cx->names().preventCancel, &option))
+            return false;
+        preventCancel = ToBoolean(option);
+    }
+
+    Rooted<ReadableStreamDefaultReader*> reader(cx);
+    reader = CreateReadableStreamDefaultReader(cx, stream);
+    if (!reader)
+        return false;
+
+    Rooted<ReadableStreamAsyncIterator*> iterator(cx);
+    iterator = ReadableStreamAsyncIterator::create(cx, reader, preventCancel);
+    if (!iterator)
+        return false;
+
+    args.rval().setObject(*iterator);
+    return true;
+}
+
+static bool
+ReadableStream_values(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return CallNonGenericMethod<Is<ReadableStream>, ReadableStream_values_impl>(cx, args);
+}
+
 // Streams spec, 3.2.4.4. pipeThrough({ writable, readable }, options)
 [[nodiscard]] static bool
 ReadableStream_pipeThrough(JSContext* cx, unsigned argc, Value* vp)
 {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_READABLESTREAM_METHOD_NOT_IMPLEMENTED, "pipeThrough");
-    return false;
-    // // Step 1: Perform ? Invoke(this, "pipeTo", « writable, options »).
+    CallArgs args = CallArgsFromVp(argc, vp);
 
-    // // Step 2: Return readable.
-    // return readable;
+    // Step 1: If ! IsReadableStream(this) is false, throw a TypeError exception.
+    if (!Is<ReadableStream>(args.thisv())) {
+        ReportValueError3(cx, JSMSG_INCOMPATIBLE_PROTO, JSDVG_SEARCH_STACK, args.thisv(),
+                          nullptr, "pipeThrough", "");
+        return false;
+    }
+
+    Rooted<ReadableStream*> stream(cx, &args.thisv().toObject().as<ReadableStream>());
+
+    // Step 2: Let readable be ? GetV(transform, "readable").
+    // Step 3: Let writable be ? GetV(transform, "writable").
+    RootedValue transform(cx, args.get(0));
+    RootedValue readableVal(cx);
+    RootedValue writableVal(cx);
+    if (!GetProperty(cx, transform, cx->names().readable, &readableVal))
+        return false;
+    if (!GetProperty(cx, transform, cx->names().writable, &writableVal))
+        return false;
+
+    // Step 4: Let promise be ? ReadableStreamPipeTo(this, writable, ...).
+    if (!Is<WritableStream>(writableVal)) {
+        ReportArgTypeError(cx, "ReadableStream.pipeThrough", "WritableStream", writableVal);
+        return false;
+    }
+    if (!Is<ReadableStream>(readableVal)) {
+        ReportArgTypeError(cx, "ReadableStream.pipeThrough", "ReadableStream", readableVal);
+        return false;
+    }
+
+    bool preventClose = false;
+    bool preventAbort = false;
+    bool preventCancel = false;
+    RootedValue signal(cx, UndefinedValue());
+    HandleValue optionsVal = args.get(1);
+    if (!optionsVal.isUndefined()) {
+        RootedValue option(cx);
+        if (!GetProperty(cx, optionsVal, cx->names().preventClose, &option))
+            return false;
+        preventClose = ToBoolean(option);
+        if (!GetProperty(cx, optionsVal, cx->names().preventAbort, &option))
+            return false;
+        preventAbort = ToBoolean(option);
+        if (!GetProperty(cx, optionsVal, cx->names().preventCancel, &option))
+            return false;
+        preventCancel = ToBoolean(option);
+        if (!GetProperty(cx, optionsVal, cx->names().signal, &signal))
+            return false;
+    }
+
+    Rooted<WritableStream*> writable(cx, &writableVal.toObject().as<WritableStream>());
+    if (stream->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_READABLESTREAM_LOCKED);
+        return false;
+    }
+
+    if (writable->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_LOCKED);
+        return false;
+    }
+
+    RootedObject ignoredPromise(cx);
+    ignoredPromise = ReadableStreamPipeTo(cx, stream, writable, preventClose, preventAbort,
+                                          preventCancel, signal);
+    if (!ignoredPromise)
+        return false;
+
+    // Step 5: Set promise.[[PromiseIsHandled]] to true.
+    RootedAtom funName(cx, cx->names().empty);
+    RootedFunction onRejected(cx, NewNativeFunction(cx, ReturnUndefined, 0, funName));
+    if (!onRejected)
+        return false;
+    if (!JS::AddPromiseReactions(cx, ignoredPromise, nullptr, onRejected))
+        return false;
+
+    // Step 6: Return readable.
+    args.rval().set(readableVal);
+    return true;
 }
 
 // Streams spec, 3.2.4.5. pipeTo(dest, { preventClose, preventAbort, preventCancel } = {})
-// TODO: Unimplemented since spec is not complete yet.
 [[nodiscard]] static bool
 ReadableStream_pipeTo(JSContext* cx, unsigned argc, Value* vp)
 {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_READABLESTREAM_METHOD_NOT_IMPLEMENTED, "pipeTo");
-    return false;
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    // Step 1: If ! IsReadableStream(this) is false, return a promise rejected
+    //         with a TypeError exception.
+    if (!Is<ReadableStream>(args.thisv())) {
+        ReportValueError3(cx, JSMSG_INCOMPATIBLE_PROTO, JSDVG_SEARCH_STACK, args.thisv(),
+                          nullptr, "pipeTo", "");
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    Rooted<ReadableStream*> stream(cx, &args.thisv().toObject().as<ReadableStream>());
+    HandleValue destVal = args.get(0);
+
+    // Step 2: If ! IsWritableStream(destination) is false, return a promise
+    //         rejected with a TypeError exception.
+    if (!Is<WritableStream>(destVal)) {
+        ReportArgTypeError(cx, "ReadableStream.pipeTo", "WritableStream", destVal);
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    bool preventClose = false;
+    bool preventAbort = false;
+    bool preventCancel = false;
+    RootedValue signal(cx, UndefinedValue());
+    HandleValue optionsVal = args.get(1);
+    if (!optionsVal.isUndefined()) {
+        RootedValue option(cx);
+        if (!GetProperty(cx, optionsVal, cx->names().preventClose, &option))
+            return ReturnPromiseRejectedWithPendingError(cx, args);
+        preventClose = ToBoolean(option);
+        if (!GetProperty(cx, optionsVal, cx->names().preventAbort, &option))
+            return ReturnPromiseRejectedWithPendingError(cx, args);
+        preventAbort = ToBoolean(option);
+        if (!GetProperty(cx, optionsVal, cx->names().preventCancel, &option))
+            return ReturnPromiseRejectedWithPendingError(cx, args);
+        preventCancel = ToBoolean(option);
+        if (!GetProperty(cx, optionsVal, cx->names().signal, &signal))
+            return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    // Step 6: If ! IsReadableStreamLocked(this) is true, return a promise
+    //         rejected with a TypeError exception.
+    if (stream->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_READABLESTREAM_LOCKED);
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    Rooted<WritableStream*> dest(cx, &destVal.toObject().as<WritableStream>());
+
+    // Step 7: If ! IsWritableStreamLocked(destination) is true, return a
+    //         promise rejected with a TypeError exception.
+    if (dest->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_LOCKED);
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    // Step 8: Return ! ReadableStreamPipeTo(this, destination, ...).
+    RootedObject pipePromise(cx);
+    pipePromise = ReadableStreamPipeTo(cx, stream, dest, preventClose, preventAbort,
+                                       preventCancel, signal);
+    if (!pipePromise)
+        return false;
+
+    args.rval().setObject(*pipePromise);
+    return true;
 }
 
 [[nodiscard]] static bool
@@ -980,6 +1913,8 @@ static const JSFunctionSpec ReadableStream_methods[] = {
     JS_FN("pipeThrough",    ReadableStream_pipeThrough, 2, 0),
     JS_FN("pipeTo",         ReadableStream_pipeTo,      1, 0),
     JS_FN("tee",            ReadableStream_tee,         0, 0),
+    JS_FN("values",         ReadableStream_values,      0, 0),
+    JS_SYM_FN(asyncIterator, ReadableStream_values,      0, 0),
     JS_FS_END
 };
 
@@ -989,6 +1924,1892 @@ static const JSPropertySpec ReadableStream_properties[] = {
 };
 
 CLASS_SPEC(ReadableStream, 0, StreamSlotCount, 0, 0, JS_NULL_CLASS_OPS);
+
+static bool
+MarkPromiseAsHandled(PromiseObject* promise)
+{
+    int32_t flags = promise->getFixedSlot(PromiseSlot_Flags).toInt32();
+    promise->setFixedSlot(PromiseSlot_Flags, Int32Value(flags | PROMISE_FLAG_HANDLED));
+    return true;
+}
+
+static bool
+WritableStreamCloseQueuedOrInFlight(WritableStream* stream)
+{
+    return !stream->getFixedSlot(WritableStreamSlot_CloseRequest).isUndefined() ||
+           !stream->getFixedSlot(WritableStreamSlot_InFlightCloseRequest).isUndefined();
+}
+
+static bool
+WritableStreamHasOperationMarkedInFlight(WritableStream* stream)
+{
+    return !stream->getFixedSlot(WritableStreamSlot_InFlightWriteRequest).isUndefined() ||
+           !stream->getFixedSlot(WritableStreamSlot_InFlightCloseRequest).isUndefined();
+}
+
+static bool
+WritableStreamHasBackpressure(WritableStream* stream)
+{
+    return stream->getFixedSlot(WritableStreamSlot_Backpressure).toBoolean();
+}
+
+static double
+WritableStreamDefaultControllerGetDesiredSize(WritableStreamDefaultController* controller)
+{
+    double highWaterMark = controller->getFixedSlot(WritableControllerSlot_StrategyHWM).toNumber();
+    double totalSize = controller->getFixedSlot(QueueContainerSlot_TotalSize).toNumber();
+    return highWaterMark - totalSize;
+}
+
+static bool
+WritableStreamDefaultControllerGetBackpressure(WritableStreamDefaultController* controller)
+{
+    double desiredSize = WritableStreamDefaultControllerGetDesiredSize(controller);
+    return desiredSize <= 0;
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultWriterEnsureReadyPromiseRejected(JSContext* cx,
+                                                      Handle<WritableStreamDefaultWriter*> writer,
+                                                      HandleValue error)
+{
+    RootedValue promiseVal(cx, writer->getFixedSlot(WritableWriterSlot_ReadyPromise));
+    Rooted<PromiseObject*> promise(cx, &promiseVal.toObject().as<PromiseObject>());
+    if (promise->state() == JS::PromiseState::Pending) {
+        if (!PromiseObject::reject(cx, promise, error))
+            return false;
+    } else {
+        RootedObject rejected(cx, PromiseObject::unforgeableReject(cx, error));
+        if (!rejected)
+            return false;
+        promise = &rejected->as<PromiseObject>();
+        writer->setFixedSlot(WritableWriterSlot_ReadyPromise, ObjectValue(*promise));
+    }
+    MarkPromiseAsHandled(promise);
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultWriterEnsureClosedPromiseRejected(JSContext* cx,
+                                                       Handle<WritableStreamDefaultWriter*> writer,
+                                                       HandleValue error)
+{
+    RootedValue promiseVal(cx, writer->getFixedSlot(WritableWriterSlot_ClosedPromise));
+    Rooted<PromiseObject*> promise(cx, &promiseVal.toObject().as<PromiseObject>());
+    if (promise->state() == JS::PromiseState::Pending) {
+        if (!PromiseObject::reject(cx, promise, error))
+            return false;
+    } else {
+        RootedObject rejected(cx, PromiseObject::unforgeableReject(cx, error));
+        if (!rejected)
+            return false;
+        promise = &rejected->as<PromiseObject>();
+        writer->setFixedSlot(WritableWriterSlot_ClosedPromise, ObjectValue(*promise));
+    }
+    MarkPromiseAsHandled(promise);
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamUpdateBackpressure(JSContext* cx, Handle<WritableStream*> stream, bool backpressure)
+{
+    MOZ_ASSERT(stream->writable());
+    MOZ_ASSERT(!WritableStreamCloseQueuedOrInFlight(stream));
+
+    bool oldBackpressure = WritableStreamHasBackpressure(stream);
+    if (backpressure != oldBackpressure && HasWriter(stream)) {
+        Rooted<WritableStreamDefaultWriter*> writer(cx);
+        writer = &stream->getFixedSlot(WritableStreamSlot_Writer).toObject()
+                  .as<WritableStreamDefaultWriter>();
+        if (backpressure) {
+            Rooted<PromiseObject*> readyPromise(cx, PromiseObject::createSkippingExecutor(cx));
+            if (!readyPromise)
+                return false;
+            writer->setFixedSlot(WritableWriterSlot_ReadyPromise, ObjectValue(*readyPromise));
+        } else {
+            RootedValue readyVal(cx, writer->getFixedSlot(WritableWriterSlot_ReadyPromise));
+            Rooted<PromiseObject*> readyPromise(cx, &readyVal.toObject().as<PromiseObject>());
+            if (!PromiseObject::resolve(cx, readyPromise, UndefinedHandleValue))
+                return false;
+        }
+    }
+
+    stream->setFixedSlot(WritableStreamSlot_Backpressure, BooleanValue(backpressure));
+    return true;
+}
+
+[[nodiscard]] static PromiseObject*
+WritableStreamAddWriteRequest(JSContext* cx, Handle<WritableStream*> stream)
+{
+    Rooted<PromiseObject*> promise(cx, PromiseObject::createSkippingExecutor(cx));
+    if (!promise)
+        return nullptr;
+
+    RootedValue listVal(cx, stream->getFixedSlot(WritableStreamSlot_WriteRequests));
+    RootedNativeObject writeRequests(cx, &listVal.toObject().as<NativeObject>());
+    RootedValue promiseVal(cx, ObjectValue(*promise));
+    if (!AppendToList(cx, writeRequests, promiseVal))
+        return nullptr;
+
+    return promise;
+}
+
+[[nodiscard]] static bool
+WritableStreamRejectQueuedWriteRequests(JSContext* cx, Handle<WritableStream*> stream,
+                                        HandleValue error)
+{
+    RootedValue listVal(cx, stream->getFixedSlot(WritableStreamSlot_WriteRequests));
+    RootedNativeObject writeRequests(cx, &listVal.toObject().as<NativeObject>());
+    while (writeRequests->getDenseInitializedLength() > 0) {
+        Rooted<PromiseObject*> writeRequest(cx, ShiftFromList<PromiseObject>(cx, writeRequests));
+        if (!PromiseObject::reject(cx, writeRequest, error))
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamRejectCloseAndClosedPromiseIfNeeded(JSContext* cx, Handle<WritableStream*> stream)
+{
+    RootedValue storedError(cx, stream->getFixedSlot(WritableStreamSlot_StoredError));
+
+    RootedValue closeRequestVal(cx, stream->getFixedSlot(WritableStreamSlot_CloseRequest));
+    if (!closeRequestVal.isUndefined()) {
+        Rooted<PromiseObject*> closeRequest(cx, &closeRequestVal.toObject().as<PromiseObject>());
+        if (!PromiseObject::reject(cx, closeRequest, storedError))
+            return false;
+        stream->setFixedSlot(WritableStreamSlot_CloseRequest, UndefinedValue());
+    }
+
+    if (HasWriter(stream)) {
+        Rooted<WritableStreamDefaultWriter*> writer(cx);
+        writer = &stream->getFixedSlot(WritableStreamSlot_Writer).toObject()
+                  .as<WritableStreamDefaultWriter>();
+        if (!WritableStreamDefaultWriterEnsureClosedPromiseRejected(cx, writer, storedError))
+            return false;
+    }
+
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerClearAlgorithms(WritableStreamDefaultController* controller);
+
+[[nodiscard]] static JSObject*
+WritableStreamDefaultControllerAbortSteps(JSContext* cx,
+                                          Handle<WritableStreamDefaultController*> controller,
+                                          HandleValue reason)
+{
+    RootedValue sink(cx, controller->getFixedSlot(WritableControllerSlot_UnderlyingSink));
+    RootedObject promise(cx, PromiseInvokeOrNoop(cx, sink, cx->names().abort, reason));
+    if (!promise)
+        return nullptr;
+
+    if (!WritableStreamDefaultControllerClearAlgorithms(controller))
+        return nullptr;
+
+    return promise;
+}
+
+static bool
+WritableAbortFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamPendingAbortRequest*> request(cx);
+    request = TargetFromHandler<WritableStreamPendingAbortRequest>(args.callee());
+    Rooted<PromiseObject*> promise(cx, request->promise());
+    if (!PromiseObject::resolve(cx, promise, UndefinedHandleValue))
+        return false;
+
+    Rooted<WritableStream*> stream(cx, request->stream());
+    if (!WritableStreamRejectCloseAndClosedPromiseIfNeeded(cx, stream))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+WritableAbortRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamPendingAbortRequest*> request(cx);
+    request = TargetFromHandler<WritableStreamPendingAbortRequest>(args.callee());
+    Rooted<PromiseObject*> promise(cx, request->promise());
+    if (!PromiseObject::reject(cx, promise, args.get(0)))
+        return false;
+
+    Rooted<WritableStream*> stream(cx, request->stream());
+    if (!WritableStreamRejectCloseAndClosedPromiseIfNeeded(cx, stream))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamFinishErroring(JSContext* cx, Handle<WritableStream*> stream)
+{
+    MOZ_ASSERT(stream->erroring());
+    MOZ_ASSERT(!WritableStreamHasOperationMarkedInFlight(stream));
+
+    SetWritableState(stream, WritableStream_Errored);
+    Rooted<WritableStreamDefaultController*> controller(cx, WritableControllerFromStream(stream));
+    if (!ResetQueue(cx, controller))
+        return false;
+
+    RootedValue storedError(cx, stream->getFixedSlot(WritableStreamSlot_StoredError));
+
+    if (!WritableStreamRejectQueuedWriteRequests(cx, stream, storedError))
+        return false;
+
+    RootedValue abortRequestVal(cx, stream->getFixedSlot(WritableStreamSlot_PendingAbortRequest));
+    if (abortRequestVal.isUndefined())
+        return WritableStreamRejectCloseAndClosedPromiseIfNeeded(cx, stream);
+
+    Rooted<WritableStreamPendingAbortRequest*> abortRequest(cx);
+    abortRequest = &abortRequestVal.toObject().as<WritableStreamPendingAbortRequest>();
+    stream->setFixedSlot(WritableStreamSlot_PendingAbortRequest, UndefinedValue());
+
+    Rooted<PromiseObject*> abortPromise(cx, abortRequest->promise());
+    if (abortRequest->wasAlreadyErroring()) {
+        if (!PromiseObject::reject(cx, abortPromise, storedError))
+            return false;
+        return WritableStreamRejectCloseAndClosedPromiseIfNeeded(cx, stream);
+    }
+
+    RootedValue reason(cx, abortRequest->reason());
+    RootedObject actionPromise(cx, WritableStreamDefaultControllerAbortSteps(cx, controller, reason));
+    if (!actionPromise)
+        return false;
+
+    RootedObject onFulfilled(cx, NewHandler(cx, WritableAbortFulfilledHandler, abortRequest));
+    if (!onFulfilled)
+        return false;
+    RootedObject onRejected(cx, NewHandler(cx, WritableAbortRejectedHandler, abortRequest));
+    if (!onRejected)
+        return false;
+    return JS::AddPromiseReactions(cx, actionPromise, onFulfilled, onRejected);
+}
+
+[[nodiscard]] static bool
+WritableStreamStartErroring(JSContext* cx, Handle<WritableStream*> stream, HandleValue reason)
+{
+    if (!stream->writable())
+        return true;
+
+    SetWritableState(stream, WritableStream_Erroring);
+    stream->setFixedSlot(WritableStreamSlot_StoredError, reason);
+
+    if (HasWriter(stream)) {
+        Rooted<WritableStreamDefaultWriter*> writer(cx);
+        writer = &stream->getFixedSlot(WritableStreamSlot_Writer).toObject()
+                  .as<WritableStreamDefaultWriter>();
+        if (!WritableStreamDefaultWriterEnsureReadyPromiseRejected(cx, writer, reason))
+            return false;
+    }
+
+    Rooted<WritableStreamDefaultController*> controller(cx, WritableControllerFromStream(stream));
+    if (!WritableStreamHasOperationMarkedInFlight(stream) &&
+        (WritableControllerFlags(controller) & WritableControllerFlag_Started))
+    {
+        return WritableStreamFinishErroring(cx, stream);
+    }
+
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamDealWithRejection(JSContext* cx, Handle<WritableStream*> stream,
+                                HandleValue error)
+{
+    if (stream->writable())
+        return WritableStreamStartErroring(cx, stream, error);
+
+    if (stream->erroring())
+        return WritableStreamFinishErroring(cx, stream);
+
+    return true;
+}
+
+[[nodiscard]] static JSObject*
+PromiseInvokeOrNoop0(JSContext* cx, HandleValue O, HandlePropertyName P)
+{
+    if (O.isUndefined() || O.isNull())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+
+    RootedValue method(cx);
+    if (!GetProperty(cx, O, P, &method))
+        return PromiseRejectedWithPendingError(cx);
+
+    if (method.isUndefined())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+
+    RootedValue returnValue(cx);
+    if (!Call(cx, method, O, &returnValue))
+        return PromiseRejectedWithPendingError(cx);
+
+    return PromiseObject::unforgeableResolve(cx, returnValue);
+}
+
+[[nodiscard]] static JSObject*
+PromiseInvokeOrNoop2(JSContext* cx, HandleValue O, HandlePropertyName P,
+                     HandleValue arg0, HandleValue arg1)
+{
+    if (O.isUndefined() || O.isNull())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+
+    RootedValue method(cx);
+    if (!GetProperty(cx, O, P, &method))
+        return PromiseRejectedWithPendingError(cx);
+
+    if (method.isUndefined())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+
+    RootedValue returnValue(cx);
+    if (!Call(cx, method, O, arg0, arg1, &returnValue))
+        return PromiseRejectedWithPendingError(cx);
+
+    return PromiseObject::unforgeableResolve(cx, returnValue);
+}
+
+[[nodiscard]] static bool
+WritableStreamFinishInFlightWrite(JSContext* cx, Handle<WritableStream*> stream)
+{
+    RootedValue requestVal(cx, stream->getFixedSlot(WritableStreamSlot_InFlightWriteRequest));
+    Rooted<PromiseObject*> request(cx, &requestVal.toObject().as<PromiseObject>());
+    if (!PromiseObject::resolve(cx, request, UndefinedHandleValue))
+        return false;
+    stream->setFixedSlot(WritableStreamSlot_InFlightWriteRequest, UndefinedValue());
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamFinishInFlightWriteWithError(JSContext* cx, Handle<WritableStream*> stream,
+                                           HandleValue error)
+{
+    RootedValue requestVal(cx, stream->getFixedSlot(WritableStreamSlot_InFlightWriteRequest));
+    Rooted<PromiseObject*> request(cx, &requestVal.toObject().as<PromiseObject>());
+    if (!PromiseObject::reject(cx, request, error))
+        return false;
+    stream->setFixedSlot(WritableStreamSlot_InFlightWriteRequest, UndefinedValue());
+    return WritableStreamDealWithRejection(cx, stream, error);
+}
+
+[[nodiscard]] static bool
+WritableStreamFinishInFlightClose(JSContext* cx, Handle<WritableStream*> stream)
+{
+    RootedValue requestVal(cx, stream->getFixedSlot(WritableStreamSlot_InFlightCloseRequest));
+    Rooted<PromiseObject*> request(cx, &requestVal.toObject().as<PromiseObject>());
+    if (!PromiseObject::resolve(cx, request, UndefinedHandleValue))
+        return false;
+    stream->setFixedSlot(WritableStreamSlot_InFlightCloseRequest, UndefinedValue());
+
+    WritableStreamState state = WritableState(stream);
+    if (state == WritableStream_Erroring) {
+        stream->setFixedSlot(WritableStreamSlot_StoredError, UndefinedValue());
+
+        RootedValue abortRequestVal(cx, stream->getFixedSlot(WritableStreamSlot_PendingAbortRequest));
+        if (!abortRequestVal.isUndefined()) {
+            Rooted<WritableStreamPendingAbortRequest*> abortRequest(cx);
+            abortRequest = &abortRequestVal.toObject().as<WritableStreamPendingAbortRequest>();
+            Rooted<PromiseObject*> abortPromise(cx, abortRequest->promise());
+            if (!PromiseObject::resolve(cx, abortPromise, UndefinedHandleValue))
+                return false;
+            stream->setFixedSlot(WritableStreamSlot_PendingAbortRequest, UndefinedValue());
+        }
+    }
+
+    SetWritableState(stream, WritableStream_Closed);
+    if (HasWriter(stream)) {
+        Rooted<WritableStreamDefaultWriter*> writer(cx);
+        writer = &stream->getFixedSlot(WritableStreamSlot_Writer).toObject()
+                  .as<WritableStreamDefaultWriter>();
+        RootedValue closedVal(cx, writer->getFixedSlot(WritableWriterSlot_ClosedPromise));
+        Rooted<PromiseObject*> closedPromise(cx, &closedVal.toObject().as<PromiseObject>());
+        if (!PromiseObject::resolve(cx, closedPromise, UndefinedHandleValue))
+            return false;
+    }
+
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamFinishInFlightCloseWithError(JSContext* cx, Handle<WritableStream*> stream,
+                                           HandleValue error)
+{
+    RootedValue requestVal(cx, stream->getFixedSlot(WritableStreamSlot_InFlightCloseRequest));
+    Rooted<PromiseObject*> request(cx, &requestVal.toObject().as<PromiseObject>());
+    if (!PromiseObject::reject(cx, request, error))
+        return false;
+    stream->setFixedSlot(WritableStreamSlot_InFlightCloseRequest, UndefinedValue());
+
+    RootedValue abortRequestVal(cx, stream->getFixedSlot(WritableStreamSlot_PendingAbortRequest));
+    if (!abortRequestVal.isUndefined()) {
+        Rooted<WritableStreamPendingAbortRequest*> abortRequest(cx);
+        abortRequest = &abortRequestVal.toObject().as<WritableStreamPendingAbortRequest>();
+        Rooted<PromiseObject*> abortPromise(cx, abortRequest->promise());
+        if (!PromiseObject::reject(cx, abortPromise, error))
+            return false;
+        stream->setFixedSlot(WritableStreamSlot_PendingAbortRequest, UndefinedValue());
+    }
+
+    return WritableStreamDealWithRejection(cx, stream, error);
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerAdvanceQueueIfNeeded(JSContext* cx,
+                                                    Handle<WritableStreamDefaultController*> controller);
+
+static bool
+WritableSinkWriteFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = TargetFromHandler<WritableStreamDefaultController>(args.callee());
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    if (!WritableStreamFinishInFlightWrite(cx, stream))
+        return false;
+
+    WritableStreamState state = WritableState(stream);
+    MOZ_ASSERT(state == WritableStream_Writable || state == WritableStream_Erroring);
+
+    RootedValue chunk(cx);
+    if (!DequeueValue(cx, controller, &chunk))
+        return false;
+
+    if (!WritableStreamCloseQueuedOrInFlight(stream) && state == WritableStream_Writable) {
+        bool backpressure = WritableStreamDefaultControllerGetBackpressure(controller);
+        if (!WritableStreamUpdateBackpressure(cx, stream, backpressure))
+            return false;
+    }
+
+    if (!WritableStreamDefaultControllerAdvanceQueueIfNeeded(cx, controller))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+WritableSinkWriteRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = TargetFromHandler<WritableStreamDefaultController>(args.callee());
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    if (stream->writable() && !WritableStreamDefaultControllerClearAlgorithms(controller))
+        return false;
+
+    return WritableStreamFinishInFlightWriteWithError(cx, stream, args.get(0));
+}
+
+static bool
+WritableSinkCloseFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = TargetFromHandler<WritableStreamDefaultController>(args.callee());
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    if (!WritableStreamFinishInFlightClose(cx, stream))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+WritableSinkCloseRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = TargetFromHandler<WritableStreamDefaultController>(args.callee());
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    return WritableStreamFinishInFlightCloseWithError(cx, stream, args.get(0));
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerClearAlgorithms(WritableStreamDefaultController* controller)
+{
+    controller->setFixedSlot(WritableControllerSlot_StrategySize, UndefinedValue());
+    controller->setFixedSlot(WritableControllerSlot_UnderlyingSink, UndefinedValue());
+    return true;
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerProcessWrite(JSContext* cx,
+                                            Handle<WritableStreamDefaultController*> controller,
+                                            HandleValue recordVal)
+{
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    RootedValue listVal(cx, stream->getFixedSlot(WritableStreamSlot_WriteRequests));
+    RootedNativeObject writeRequests(cx, &listVal.toObject().as<NativeObject>());
+    Rooted<PromiseObject*> writeRequest(cx, ShiftFromList<PromiseObject>(cx, writeRequests));
+    stream->setFixedSlot(WritableStreamSlot_InFlightWriteRequest, ObjectValue(*writeRequest));
+
+    Rooted<WritableStreamWriteRecord*> record(cx);
+    record = &recordVal.toObject().as<WritableStreamWriteRecord>();
+    RootedValue chunk(cx, record->chunk());
+    RootedValue sink(cx, controller->getFixedSlot(WritableControllerSlot_UnderlyingSink));
+    RootedValue controllerVal(cx, ObjectValue(*controller));
+    RootedObject sinkWritePromise(cx);
+    sinkWritePromise = PromiseInvokeOrNoop2(cx, sink, cx->names().write, chunk, controllerVal);
+    if (!sinkWritePromise)
+        return false;
+
+    RootedObject onFulfilled(cx, NewHandler(cx, WritableSinkWriteFulfilledHandler, controller));
+    if (!onFulfilled)
+        return false;
+    RootedObject onRejected(cx, NewHandler(cx, WritableSinkWriteRejectedHandler, controller));
+    if (!onRejected)
+        return false;
+
+    return JS::AddPromiseReactions(cx, sinkWritePromise, onFulfilled, onRejected);
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerProcessClose(JSContext* cx,
+                                            Handle<WritableStreamDefaultController*> controller)
+{
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    RootedValue closeRequestVal(cx, stream->getFixedSlot(WritableStreamSlot_CloseRequest));
+    stream->setFixedSlot(WritableStreamSlot_InFlightCloseRequest, closeRequestVal);
+    stream->setFixedSlot(WritableStreamSlot_CloseRequest, UndefinedValue());
+
+    RootedValue ignored(cx);
+    if (!DequeueValue(cx, controller, &ignored))
+        return false;
+
+    RootedValue sink(cx, controller->getFixedSlot(WritableControllerSlot_UnderlyingSink));
+    RootedObject sinkClosePromise(cx, PromiseInvokeOrNoop0(cx, sink, cx->names().close));
+    if (!sinkClosePromise)
+        return false;
+
+    if (!WritableStreamDefaultControllerClearAlgorithms(controller))
+        return false;
+
+    RootedObject onFulfilled(cx, NewHandler(cx, WritableSinkCloseFulfilledHandler, controller));
+    if (!onFulfilled)
+        return false;
+    RootedObject onRejected(cx, NewHandler(cx, WritableSinkCloseRejectedHandler, controller));
+    if (!onRejected)
+        return false;
+
+    return JS::AddPromiseReactions(cx, sinkClosePromise, onFulfilled, onRejected);
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerAdvanceQueueIfNeeded(JSContext* cx,
+                                                    Handle<WritableStreamDefaultController*> controller)
+{
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+
+    if (!(WritableControllerFlags(controller) & WritableControllerFlag_Started))
+        return true;
+
+    if (!stream->getFixedSlot(WritableStreamSlot_InFlightWriteRequest).isUndefined())
+        return true;
+
+    WritableStreamState state = WritableState(stream);
+    MOZ_ASSERT(state != WritableStream_Closed && state != WritableStream_Errored);
+
+    if (state == WritableStream_Erroring)
+        return WritableStreamFinishErroring(cx, stream);
+
+    RootedValue queueVal(cx, controller->getFixedSlot(QueueContainerSlot_Queue));
+    RootedNativeObject queue(cx, &queueVal.toObject().as<NativeObject>());
+    if (queue->getDenseInitializedLength() == 0)
+        return true;
+
+    Rooted<QueueEntry*> entry(cx, PeekList<QueueEntry>(queue));
+    RootedValue value(cx, entry->value());
+    if (value.isNull())
+        return WritableStreamDefaultControllerProcessClose(cx, controller);
+
+    return WritableStreamDefaultControllerProcessWrite(cx, controller, value);
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerError(JSContext* cx,
+                                     Handle<WritableStreamDefaultController*> controller,
+                                     HandleValue error)
+{
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+    if (!stream->writable())
+        return true;
+
+    if (!WritableStreamDefaultControllerClearAlgorithms(controller))
+        return false;
+    return WritableStreamStartErroring(cx, stream, error);
+}
+
+[[nodiscard]] static double
+WritableStreamDefaultControllerGetChunkSize(JSContext* cx,
+                                            Handle<WritableStreamDefaultController*> controller,
+                                            HandleValue chunk)
+{
+    RootedValue size(cx, controller->getFixedSlot(WritableControllerSlot_StrategySize));
+    if (size.isUndefined())
+        return 1;
+
+    RootedValue rval(cx);
+    if (!Call(cx, size, UndefinedHandleValue, chunk, &rval)) {
+        RootedValue exn(cx);
+        if (!GetAndClearException(cx, &exn))
+            return 1;
+        if (!WritableStreamDefaultControllerError(cx, controller, exn))
+            return 1;
+        return 1;
+    }
+
+    double chunkSize;
+    if (!ToNumber(cx, rval, &chunkSize)) {
+        RootedValue exn(cx);
+        if (!GetAndClearException(cx, &exn))
+            return 1;
+        if (!WritableStreamDefaultControllerError(cx, controller, exn))
+            return 1;
+        return 1;
+    }
+
+    return chunkSize;
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultControllerWrite(JSContext* cx,
+                                     Handle<WritableStreamDefaultController*> controller,
+                                     HandleValue chunk, double chunkSize)
+{
+    Rooted<WritableStreamWriteRecord*> record(cx, WritableStreamWriteRecord::create(cx, chunk));
+    if (!record)
+        return false;
+
+    RootedValue recordVal(cx, ObjectValue(*record));
+    RootedValue sizeVal(cx, NumberValue(chunkSize));
+    if (!EnqueueValueWithSize(cx, controller, recordVal, sizeVal)) {
+        RootedValue exn(cx);
+        if (!GetAndClearException(cx, &exn))
+            return false;
+        return WritableStreamDefaultControllerError(cx, controller, exn);
+    }
+
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+    if (!WritableStreamCloseQueuedOrInFlight(stream) && stream->writable()) {
+        bool backpressure = WritableStreamDefaultControllerGetBackpressure(controller);
+        if (!WritableStreamUpdateBackpressure(cx, stream, backpressure))
+            return false;
+    }
+
+    return WritableStreamDefaultControllerAdvanceQueueIfNeeded(cx, controller);
+}
+
+[[nodiscard]] static JSObject*
+WritableStreamDefaultWriterWrite(JSContext* cx, Handle<WritableStreamDefaultWriter*> writer,
+                                 HandleValue chunk)
+{
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    Rooted<WritableStreamDefaultController*> controller(cx, WritableControllerFromStream(stream));
+
+    double chunkSize = WritableStreamDefaultControllerGetChunkSize(cx, controller, chunk);
+
+    if (stream != StreamFromWriter(writer)) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_RELEASED);
+        return PromiseRejectedWithPendingError(cx);
+    }
+
+    if (stream->errored()) {
+        RootedValue storedError(cx, stream->getFixedSlot(WritableStreamSlot_StoredError));
+        return PromiseObject::unforgeableReject(cx, storedError);
+    }
+
+    if (WritableStreamCloseQueuedOrInFlight(stream) || stream->closed()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_CLOSING_OR_CLOSED, "write");
+        return PromiseRejectedWithPendingError(cx);
+    }
+
+    if (stream->erroring()) {
+        RootedValue storedError(cx, stream->getFixedSlot(WritableStreamSlot_StoredError));
+        return PromiseObject::unforgeableReject(cx, storedError);
+    }
+
+    Rooted<PromiseObject*> promise(cx, WritableStreamAddWriteRequest(cx, stream));
+    if (!promise)
+        return nullptr;
+
+    if (!WritableStreamDefaultControllerWrite(cx, controller, chunk, chunkSize))
+        return nullptr;
+
+    return promise;
+}
+
+[[nodiscard]] static JSObject*
+WritableStreamClose(JSContext* cx, Handle<WritableStream*> stream)
+{
+    Rooted<PromiseObject*> promise(cx, PromiseObject::createSkippingExecutor(cx));
+    if (!promise)
+        return nullptr;
+
+    stream->setFixedSlot(WritableStreamSlot_CloseRequest, ObjectValue(*promise));
+
+    Rooted<WritableStreamDefaultController*> controller(cx, WritableControllerFromStream(stream));
+    RootedValue closeSentinel(cx, NullValue());
+    RootedValue sizeVal(cx, Int32Value(0));
+    if (!EnqueueValueWithSize(cx, controller, closeSentinel, sizeVal))
+        return nullptr;
+
+    if (!WritableStreamDefaultControllerAdvanceQueueIfNeeded(cx, controller))
+        return nullptr;
+
+    return promise;
+}
+
+[[nodiscard]] static JSObject*
+WritableStreamDefaultWriterCloseWithErrorPropagation(JSContext* cx,
+                                                     Handle<WritableStreamDefaultWriter*> writer)
+{
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    if (WritableStreamCloseQueuedOrInFlight(stream) || stream->closed())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+
+    if (stream->errored()) {
+        RootedValue storedError(cx, stream->getFixedSlot(WritableStreamSlot_StoredError));
+        return PromiseObject::unforgeableReject(cx, storedError);
+    }
+
+    return WritableStreamClose(cx, stream);
+}
+
+[[nodiscard]] static JSObject*
+WritableStreamAbort(JSContext* cx, Handle<WritableStream*> stream, HandleValue reason)
+{
+    if (stream->closed() || stream->errored())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+
+    RootedValue pendingAbortVal(cx, stream->getFixedSlot(WritableStreamSlot_PendingAbortRequest));
+    if (!pendingAbortVal.isUndefined()) {
+        Rooted<WritableStreamPendingAbortRequest*> pending(cx);
+        pending = &pendingAbortVal.toObject().as<WritableStreamPendingAbortRequest>();
+        return pending->promise();
+    }
+
+    bool wasAlreadyErroring = stream->erroring();
+    RootedValue abortReason(cx, reason);
+    if (wasAlreadyErroring)
+        abortReason.setUndefined();
+
+    Rooted<PromiseObject*> promise(cx, PromiseObject::createSkippingExecutor(cx));
+    if (!promise)
+        return nullptr;
+
+    Rooted<WritableStreamPendingAbortRequest*> request(cx);
+    request = WritableStreamPendingAbortRequest::create(cx, stream, promise, abortReason,
+                                                        wasAlreadyErroring);
+    if (!request)
+        return nullptr;
+
+    stream->setFixedSlot(WritableStreamSlot_PendingAbortRequest, ObjectValue(*request));
+
+    if (!wasAlreadyErroring && !WritableStreamStartErroring(cx, stream, abortReason))
+        return nullptr;
+
+    return promise;
+}
+
+[[nodiscard]] static bool
+WritableStreamDefaultWriterRelease(JSContext* cx,
+                                   Handle<WritableStreamDefaultWriter*> writer)
+{
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    MOZ_ASSERT(&stream->getFixedSlot(WritableStreamSlot_Writer).toObject() == writer);
+
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_RELEASED);
+    RootedValue exn(cx);
+    if (!GetAndClearException(cx, &exn))
+        return false;
+
+    if (!WritableStreamDefaultWriterEnsureReadyPromiseRejected(cx, writer, exn))
+        return false;
+    if (!WritableStreamDefaultWriterEnsureClosedPromiseRejected(cx, writer, exn))
+        return false;
+
+    stream->setFixedSlot(WritableStreamSlot_Writer, UndefinedValue());
+    writer->setFixedSlot(WritableWriterSlot_Stream, UndefinedValue());
+    return true;
+}
+
+[[nodiscard]] static WritableStreamDefaultWriter*
+CreateWritableStreamDefaultWriter(JSContext* cx, Handle<WritableStream*> stream)
+{
+    if (stream->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_LOCKED);
+        return nullptr;
+    }
+
+    RootedObject proto(cx);
+    if (!GetBuiltinPrototype(cx, JSProto_WritableStreamDefaultWriter, &proto))
+        return nullptr;
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx);
+    writer = NewObjectWithClassProto<WritableStreamDefaultWriter>(cx, proto);
+    if (!writer)
+        return nullptr;
+
+    writer->setFixedSlot(WritableWriterSlot_Stream, ObjectValue(*stream));
+    stream->setFixedSlot(WritableStreamSlot_Writer, ObjectValue(*writer));
+
+    RootedObject readyPromise(cx);
+    RootedObject closedPromise(cx);
+    if (stream->writable()) {
+        if (!WritableStreamCloseQueuedOrInFlight(stream) && WritableStreamHasBackpressure(stream))
+            readyPromise = PromiseObject::createSkippingExecutor(cx);
+        else
+            readyPromise = PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+        closedPromise = PromiseObject::createSkippingExecutor(cx);
+    } else if (stream->closed()) {
+        readyPromise = PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+        closedPromise = PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+    } else {
+        RootedValue storedError(cx, stream->getFixedSlot(WritableStreamSlot_StoredError));
+        readyPromise = PromiseObject::unforgeableReject(cx, storedError);
+        closedPromise = PromiseObject::unforgeableReject(cx, storedError);
+        if (!readyPromise || !closedPromise)
+            return nullptr;
+        MarkPromiseAsHandled(&readyPromise->as<PromiseObject>());
+        MarkPromiseAsHandled(&closedPromise->as<PromiseObject>());
+    }
+    if (!readyPromise || !closedPromise)
+        return nullptr;
+
+    writer->setFixedSlot(WritableWriterSlot_ReadyPromise, ObjectValue(*readyPromise));
+    writer->setFixedSlot(WritableWriterSlot_ClosedPromise, ObjectValue(*closedPromise));
+    return writer;
+}
+
+static bool
+WritableStartFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = TargetFromHandler<WritableStreamDefaultController>(args.callee());
+    AddWritableControllerFlags(controller, WritableControllerFlag_Started);
+    if (!WritableStreamDefaultControllerAdvanceQueueIfNeeded(cx, controller))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+WritableStartRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = TargetFromHandler<WritableStreamDefaultController>(args.callee());
+    AddWritableControllerFlags(controller, WritableControllerFlag_Started);
+    Rooted<WritableStream*> stream(cx);
+    stream = &controller->getFixedSlot(WritableControllerSlot_Stream).toObject()
+              .as<WritableStream>();
+    return WritableStreamDealWithRejection(cx, stream, args.get(0));
+}
+
+[[nodiscard]] static WritableStreamDefaultController*
+CreateWritableStreamDefaultController(JSContext* cx, Handle<WritableStream*> stream,
+                                      HandleValue underlyingSink, HandleValue size,
+                                      HandleValue highWaterMarkVal)
+{
+    RootedObject proto(cx);
+    if (!GetBuiltinPrototype(cx, JSProto_WritableStreamDefaultController, &proto))
+        return nullptr;
+
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = NewObjectWithClassProto<WritableStreamDefaultController>(cx, proto);
+    if (!controller)
+        return nullptr;
+
+    controller->setFixedSlot(WritableControllerSlot_Stream, ObjectValue(*stream));
+    controller->setFixedSlot(WritableControllerSlot_UnderlyingSink, underlyingSink);
+    controller->setFixedSlot(WritableControllerSlot_StrategySize, size);
+    controller->setFixedSlot(WritableControllerSlot_Flags, Int32Value(0));
+
+    if (!ResetQueue(cx, controller))
+        return nullptr;
+
+    double highWaterMark;
+    if (!ValidateAndNormalizeQueuingStrategy(cx, size, highWaterMarkVal, &highWaterMark))
+        return nullptr;
+    controller->setFixedSlot(WritableControllerSlot_StrategyHWM, NumberValue(highWaterMark));
+
+    stream->setFixedSlot(WritableStreamSlot_Controller, ObjectValue(*controller));
+
+    bool backpressure = WritableStreamDefaultControllerGetBackpressure(controller);
+    stream->setFixedSlot(WritableStreamSlot_Backpressure, BooleanValue(backpressure));
+
+    RootedValue startResult(cx);
+    RootedValue controllerVal(cx, ObjectValue(*controller));
+    if (underlyingSink.isUndefined() || underlyingSink.isNull()) {
+        startResult.setUndefined();
+    } else if (!InvokeOrNoop(cx, underlyingSink, cx->names().start, controllerVal, &startResult)) {
+        return nullptr;
+    }
+
+    RootedObject startPromise(cx, PromiseObject::unforgeableResolve(cx, startResult));
+    if (!startPromise)
+        return nullptr;
+
+    RootedObject onFulfilled(cx, NewHandler(cx, WritableStartFulfilledHandler, controller));
+    if (!onFulfilled)
+        return nullptr;
+    RootedObject onRejected(cx, NewHandler(cx, WritableStartRejectedHandler, controller));
+    if (!onRejected)
+        return nullptr;
+
+    if (!JS::AddPromiseReactions(cx, startPromise, onFulfilled, onRejected))
+        return nullptr;
+
+    return controller;
+}
+
+bool
+WritableStream::constructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (!ThrowIfNotConstructing(cx, args, "WritableStream"))
+        return false;
+
+    RootedValue underlyingSink(cx, args.get(0));
+    if (underlyingSink.isUndefined() || underlyingSink.isNull()) {
+        underlyingSink.setUndefined();
+    } else if (!underlyingSink.isObject()) {
+        ReportArgTypeError(cx, "WritableStream", "object", underlyingSink);
+        return false;
+    }
+
+    RootedValue typeVal(cx);
+    if (!underlyingSink.isUndefined()) {
+        if (!GetProperty(cx, underlyingSink, cx->names().type, &typeVal))
+            return false;
+        if (!typeVal.isUndefined()) {
+            JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                      JSMSG_WRITABLESTREAM_UNDERLYINGSINK_TYPE_WRONG);
+            return false;
+        }
+    }
+
+    RootedValue size(cx);
+    RootedValue highWaterMark(cx);
+    HandleValue strategyVal = args.get(1);
+    if (!strategyVal.isUndefined()) {
+        if (!GetProperty(cx, strategyVal, cx->names().size, &size))
+            return false;
+        if (!GetProperty(cx, strategyVal, cx->names().highWaterMark, &highWaterMark))
+            return false;
+    }
+    if (highWaterMark.isUndefined())
+        highWaterMark.setInt32(1);
+
+    RootedObject proto(cx);
+    if (!GetBuiltinPrototype(cx, JSProto_WritableStream, &proto))
+        return false;
+
+    Rooted<WritableStream*> stream(cx, NewObjectWithClassProto<WritableStream>(cx, proto));
+    if (!stream)
+        return false;
+
+    SetWritableState(stream, WritableStream_Writable);
+    stream->setFixedSlot(WritableStreamSlot_StoredError, UndefinedValue());
+    stream->setFixedSlot(WritableStreamSlot_InFlightWriteRequest, UndefinedValue());
+    stream->setFixedSlot(WritableStreamSlot_CloseRequest, UndefinedValue());
+    stream->setFixedSlot(WritableStreamSlot_InFlightCloseRequest, UndefinedValue());
+    stream->setFixedSlot(WritableStreamSlot_PendingAbortRequest, UndefinedValue());
+    stream->setFixedSlot(WritableStreamSlot_Backpressure, BooleanValue(false));
+
+    RootedNativeObject writeRequests(cx, SetNewList(cx, stream, WritableStreamSlot_WriteRequests));
+    if (!writeRequests)
+        return false;
+
+    RootedObject controller(cx);
+    controller = CreateWritableStreamDefaultController(cx, stream, underlyingSink, size,
+                                                       highWaterMark);
+    if (!controller)
+        return false;
+
+    args.rval().setObject(*stream);
+    return true;
+}
+
+static bool
+WritableStream_locked_impl(JSContext* cx, const CallArgs& args)
+{
+    Rooted<WritableStream*> stream(cx, &args.thisv().toObject().as<WritableStream>());
+    args.rval().setBoolean(stream->locked());
+    return true;
+}
+
+static bool
+WritableStream_locked(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return CallNonGenericMethod<Is<WritableStream>, WritableStream_locked_impl>(cx, args);
+}
+
+static bool
+WritableStream_abort(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStream>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStream", "abort");
+
+    Rooted<WritableStream*> stream(cx, &args.thisv().toObject().as<WritableStream>());
+    if (stream->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_LOCKED);
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    RootedObject promise(cx, WritableStreamAbort(cx, stream, args.get(0)));
+    if (!promise)
+        return false;
+    args.rval().setObject(*promise);
+    return true;
+}
+
+static bool
+WritableStream_close(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStream>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStream", "close");
+
+    Rooted<WritableStream*> stream(cx, &args.thisv().toObject().as<WritableStream>());
+    if (stream->locked()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_LOCKED);
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    if (WritableStreamCloseQueuedOrInFlight(stream)) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_CLOSE_QUEUED);
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    if (stream->closed()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_CLOSING_OR_CLOSED, "close");
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    RootedObject promise(cx, WritableStreamClose(cx, stream));
+    if (!promise)
+        return false;
+    args.rval().setObject(*promise);
+    return true;
+}
+
+static bool
+WritableStream_getWriter_impl(JSContext* cx, const CallArgs& args)
+{
+    Rooted<WritableStream*> stream(cx, &args.thisv().toObject().as<WritableStream>());
+    RootedObject writer(cx, CreateWritableStreamDefaultWriter(cx, stream));
+    if (!writer)
+        return false;
+    args.rval().setObject(*writer);
+    return true;
+}
+
+static bool
+WritableStream_getWriter(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return CallNonGenericMethod<Is<WritableStream>, WritableStream_getWriter_impl>(cx, args);
+}
+
+static const JSFunctionSpec WritableStream_methods[] = {
+    JS_FN("abort",    WritableStream_abort,     1, 0),
+    JS_FN("close",    WritableStream_close,     0, 0),
+    JS_FN("getWriter", WritableStream_getWriter, 0, 0),
+    JS_FS_END
+};
+
+static const JSPropertySpec WritableStream_properties[] = {
+    JS_PSG("locked", WritableStream_locked, 0),
+    JS_PS_END
+};
+
+CLASS_SPEC(WritableStream, 0, WritableStreamSlotCount, 0, 0, JS_NULL_CLASS_OPS);
+
+bool
+WritableStreamDefaultWriter::constructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    if (!ThrowIfNotConstructing(cx, args, "WritableStreamDefaultWriter"))
+        return false;
+
+    if (!Is<WritableStream>(args.get(0))) {
+        ReportArgTypeError(cx, "WritableStreamDefaultWriter", "WritableStream", args.get(0));
+        return false;
+    }
+
+    Rooted<WritableStream*> stream(cx, &args.get(0).toObject().as<WritableStream>());
+    RootedObject writer(cx, CreateWritableStreamDefaultWriter(cx, stream));
+    if (!writer)
+        return false;
+
+    args.rval().setObject(*writer);
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_closed(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStreamDefaultWriter", "get closed");
+    NativeObject* writer = &args.thisv().toObject().as<NativeObject>();
+    args.rval().set(writer->getFixedSlot(WritableWriterSlot_ClosedPromise));
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_ready(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStreamDefaultWriter", "get ready");
+    NativeObject* writer = &args.thisv().toObject().as<NativeObject>();
+    args.rval().set(writer->getFixedSlot(WritableWriterSlot_ReadyPromise));
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_desiredSize(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv())) {
+        ReportValueError3(cx, JSMSG_INCOMPATIBLE_PROTO, JSDVG_SEARCH_STACK, args.thisv(),
+                          nullptr, "get desiredSize", "");
+        return false;
+    }
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx);
+    writer = &args.thisv().toObject().as<WritableStreamDefaultWriter>();
+    if (writer->getFixedSlot(WritableWriterSlot_Stream).isUndefined()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_WRITABLESTREAM_RELEASED);
+        return false;
+    }
+
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    if (stream->errored() || stream->erroring()) {
+        args.rval().setNull();
+        return true;
+    }
+    if (stream->closed()) {
+        args.rval().setInt32(0);
+        return true;
+    }
+
+    args.rval().setNumber(WritableStreamDefaultControllerGetDesiredSize(
+        WritableControllerFromStream(stream)));
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_abort(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStreamDefaultWriter", "abort");
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx);
+    writer = &args.thisv().toObject().as<WritableStreamDefaultWriter>();
+    if (writer->getFixedSlot(WritableWriterSlot_Stream).isUndefined()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_NOT_OWNED, "abort");
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    RootedObject promise(cx, WritableStreamAbort(cx, stream, args.get(0)));
+    if (!promise)
+        return false;
+    args.rval().setObject(*promise);
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_close(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStreamDefaultWriter", "close");
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx);
+    writer = &args.thisv().toObject().as<WritableStreamDefaultWriter>();
+    if (writer->getFixedSlot(WritableWriterSlot_Stream).isUndefined()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_NOT_OWNED, "close");
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    if (WritableStreamCloseQueuedOrInFlight(stream) || stream->closed()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_CLOSING_OR_CLOSED, "close");
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    RootedObject promise(cx, WritableStreamClose(cx, stream));
+    if (!promise)
+        return false;
+    args.rval().setObject(*promise);
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_releaseLock(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv())) {
+        ReportValueError3(cx, JSMSG_INCOMPATIBLE_PROTO, JSDVG_SEARCH_STACK, args.thisv(),
+                          nullptr, "releaseLock", "");
+        return false;
+    }
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx);
+    writer = &args.thisv().toObject().as<WritableStreamDefaultWriter>();
+    if (writer->getFixedSlot(WritableWriterSlot_Stream).isUndefined()) {
+        args.rval().setUndefined();
+        return true;
+    }
+
+    if (!WritableStreamDefaultWriterRelease(cx, writer))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+WritableStreamDefaultWriter_write(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!Is<WritableStreamDefaultWriter>(args.thisv()))
+        return RejectNonGenericMethod(cx, args, "WritableStreamDefaultWriter", "write");
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx);
+    writer = &args.thisv().toObject().as<WritableStreamDefaultWriter>();
+    if (writer->getFixedSlot(WritableWriterSlot_Stream).isUndefined()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_NOT_OWNED, "write");
+        return ReturnPromiseRejectedWithPendingError(cx, args);
+    }
+
+    RootedObject promise(cx, WritableStreamDefaultWriterWrite(cx, writer, args.get(0)));
+    if (!promise)
+        return false;
+    args.rval().setObject(*promise);
+    return true;
+}
+
+static const JSPropertySpec WritableStreamDefaultWriter_properties[] = {
+    JS_PSG("closed", WritableStreamDefaultWriter_closed, 0),
+    JS_PSG("desiredSize", WritableStreamDefaultWriter_desiredSize, 0),
+    JS_PSG("ready", WritableStreamDefaultWriter_ready, 0),
+    JS_PS_END
+};
+
+static const JSFunctionSpec WritableStreamDefaultWriter_methods[] = {
+    JS_FN("abort",       WritableStreamDefaultWriter_abort,       1, 0),
+    JS_FN("close",       WritableStreamDefaultWriter_close,       0, 0),
+    JS_FN("releaseLock", WritableStreamDefaultWriter_releaseLock, 0, 0),
+    JS_FN("write",       WritableStreamDefaultWriter_write,       1, 0),
+    JS_FS_END
+};
+
+CLASS_SPEC(WritableStreamDefaultWriter, 1, WritableWriterSlotCount,
+           0, 0, JS_NULL_CLASS_OPS);
+
+bool
+WritableStreamDefaultController::constructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_CONSTRUCTOR,
+                              "WritableStreamDefaultController");
+    return false;
+}
+
+static bool
+WritableStreamDefaultController_error_impl(JSContext* cx, const CallArgs& args)
+{
+    Rooted<WritableStreamDefaultController*> controller(cx);
+    controller = &args.thisv().toObject().as<WritableStreamDefaultController>();
+    if (!WritableStreamDefaultControllerError(cx, controller, args.get(0)))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+WritableStreamDefaultController_error(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return CallNonGenericMethod<Is<WritableStreamDefaultController>,
+                                WritableStreamDefaultController_error_impl>(cx, args);
+}
+
+static const JSPropertySpec WritableStreamDefaultController_properties[] = {
+    JS_PS_END
+};
+
+static const JSFunctionSpec WritableStreamDefaultController_methods[] = {
+    JS_FN("error", WritableStreamDefaultController_error, 1, 0),
+    JS_FS_END
+};
+
+CLASS_SPEC(WritableStreamDefaultController, 0, WritableControllerSlotCount,
+           0, 0, JS_NULL_CLASS_OPS);
+
+[[nodiscard]] static bool
+PipeToStep(JSContext* cx, Handle<PipeToState*> state);
+
+[[nodiscard]] static bool
+PipeToFinalize(JSContext* cx, Handle<PipeToState*> state, HandleValue error, bool hasError)
+{
+    RootedValue signal(cx, state->signal());
+    RootedValue abortAlgorithm(cx, state->abortAlgorithm());
+    if (signal.isObject() && abortAlgorithm.isObject()) {
+        RootedValue removeListener(cx);
+        if (!GetProperty(cx, signal, cx->names().removeEventListener, &removeListener))
+            return false;
+        if (!removeListener.isUndefined()) {
+            RootedValue eventType(cx, StringValue(cx->names().abort));
+            RootedValue rval(cx);
+            if (!Call(cx, removeListener, signal, eventType, abortAlgorithm, &rval))
+                return false;
+        }
+    }
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx, state->writer());
+    if (!writer->getFixedSlot(WritableWriterSlot_Stream).isUndefined()) {
+        if (!WritableStreamDefaultWriterRelease(cx, writer))
+            return false;
+    }
+
+    RootedNativeObject reader(cx, state->reader());
+    if (!reader->getFixedSlot(ReaderSlot_Stream).isUndefined()) {
+        if (!ReadableStreamReaderGenericRelease(cx, reader))
+            return false;
+    }
+
+    Rooted<PromiseObject*> promise(cx, state->promise());
+    if (hasError)
+        return PromiseObject::reject(cx, promise, error);
+    return PromiseObject::resolve(cx, promise, UndefinedHandleValue);
+}
+
+static bool
+PipeToActionFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    RootedValue error(cx, state->storedError());
+    if (!PipeToFinalize(cx, state, error, state->hasError()))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+PipeToActionRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    if (!PipeToFinalize(cx, state, args.get(0), true))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+[[nodiscard]] static bool
+PipeToWaitForAction(JSContext* cx, Handle<PipeToState*> state, HandleObject actionPromise,
+                    HandleValue error, bool hasError)
+{
+    if (hasError)
+        state->setError(error);
+
+    RootedObject onFulfilled(cx, NewHandler(cx, PipeToActionFulfilledHandler, state));
+    if (!onFulfilled)
+        return false;
+    RootedObject onRejected(cx, NewHandler(cx, PipeToActionRejectedHandler, state));
+    if (!onRejected)
+        return false;
+
+    return JS::AddPromiseReactions(cx, actionPromise, onFulfilled, onRejected);
+}
+
+[[nodiscard]] static bool
+PipeToPerformPendingAction(JSContext* cx, Handle<PipeToState*> state)
+{
+    PipeToState::PendingAction action = state->pendingAction();
+    state->setPendingAction(PipeToState::Action_None);
+
+    RootedValue error(cx, state->storedError());
+    RootedObject actionPromise(cx);
+
+    if (action == PipeToState::Action_AbortDest) {
+        Rooted<WritableStream*> dest(cx, state->dest());
+        actionPromise = WritableStreamAbort(cx, dest, error);
+    } else if (action == PipeToState::Action_CancelSource) {
+        Rooted<ReadableStream*> source(cx, state->source());
+        actionPromise = ReadableStream::cancel(cx, source, error);
+    } else if (action == PipeToState::Action_CloseDest) {
+        Rooted<WritableStreamDefaultWriter*> writer(cx, state->writer());
+        actionPromise = WritableStreamDefaultWriterCloseWithErrorPropagation(cx, writer);
+    } else {
+        return PipeToFinalize(cx, state, error, state->hasError());
+    }
+
+    if (!actionPromise)
+        return false;
+    return PipeToWaitForAction(cx, state, actionPromise, error, state->hasError());
+}
+
+[[nodiscard]] static bool
+PipeToShutdown(JSContext* cx, Handle<PipeToState*> state, HandleValue error, bool hasError,
+               PipeToState::PendingAction action)
+{
+    if (state->shuttingDown())
+        return true;
+
+    state->setShuttingDown();
+    if (hasError)
+        state->setError(error);
+    state->setPendingAction(action);
+
+    if (state->pendingWrites() > 0 && state->dest()->writable() &&
+        !WritableStreamCloseQueuedOrInFlight(state->dest()))
+    {
+        return true;
+    }
+
+    return PipeToPerformPendingAction(cx, state);
+}
+
+[[nodiscard]] static bool
+PipeToShutdown(JSContext* cx, Handle<PipeToState*> state)
+{
+    RootedValue error(cx, UndefinedValue());
+    return PipeToShutdown(cx, state, error, false, PipeToState::Action_None);
+}
+
+[[nodiscard]] static bool
+PipeToShutdownWithError(JSContext* cx, Handle<PipeToState*> state, HandleValue error)
+{
+    return PipeToShutdown(cx, state, error, true, PipeToState::Action_None);
+}
+
+[[nodiscard]] static bool
+PipeToShutdownWithTypeError(JSContext* cx, Handle<PipeToState*> state)
+{
+    RootedValue error(cx);
+    if (!GetAndClearException(cx, &error))
+        return false;
+    return PipeToShutdownWithError(cx, state, error);
+}
+
+[[nodiscard]] static bool
+PipeToGetWriterDesiredSize(JSContext* cx, Handle<WritableStreamDefaultWriter*> writer,
+                           bool* hasSize, double* size)
+{
+    Rooted<WritableStream*> stream(cx, StreamFromWriter(writer));
+    if (stream->errored() || stream->erroring()) {
+        *hasSize = false;
+        return true;
+    }
+    if (stream->closed()) {
+        *hasSize = true;
+        *size = 0;
+        return true;
+    }
+
+    *hasSize = true;
+    *size = WritableStreamDefaultControllerGetDesiredSize(WritableControllerFromStream(stream));
+    return true;
+}
+
+static bool
+PipeToReadyFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    if (!PipeToStep(cx, state))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+PipeToReadyRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    if (!PipeToStep(cx, state))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+PipeToWriteFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    state->finishPendingWrite();
+
+    if (state->shuttingDown() && state->pendingWrites() == 0) {
+        if (!PipeToPerformPendingAction(cx, state))
+            return false;
+    } else if (!state->shuttingDown()) {
+        if (!PipeToStep(cx, state))
+            return false;
+    }
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+PipeToWriteRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    state->finishPendingWrite();
+
+    if (state->shuttingDown() && state->pendingWrites() == 0) {
+        if (!PipeToPerformPendingAction(cx, state))
+            return false;
+    } else if (!state->shuttingDown()) {
+        if (!PipeToStep(cx, state))
+            return false;
+    }
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+PipeToReadFulfilledHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    state->clearReading();
+
+    if (state->shuttingDown()) {
+        args.rval().setUndefined();
+        return true;
+    }
+
+    RootedValue resultVal(cx, args.get(0));
+    if (!resultVal.isObject()) {
+        JS_ReportErrorASCII(cx, "ReadableStream reader returned a non-object result");
+        return PipeToShutdownWithTypeError(cx, state);
+    }
+
+    RootedObject result(cx, &resultVal.toObject());
+    RootedValue doneVal(cx);
+    if (!GetProperty(cx, result, result, cx->names().done, &doneVal))
+        return false;
+    bool done = ToBoolean(doneVal);
+
+    if (done) {
+        if (state->preventClose())
+            return PipeToShutdown(cx, state);
+
+        RootedValue error(cx, UndefinedValue());
+        return PipeToShutdown(cx, state, error, false, PipeToState::Action_CloseDest);
+    }
+
+    RootedValue chunk(cx);
+    if (!GetProperty(cx, result, result, cx->names().value, &chunk))
+        return false;
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx, state->writer());
+    RootedObject writePromise(cx, WritableStreamDefaultWriterWrite(cx, writer, chunk));
+    if (!writePromise)
+        return false;
+
+    state->addPendingWrite();
+
+    RootedObject onFulfilled(cx, NewHandler(cx, PipeToWriteFulfilledHandler, state));
+    if (!onFulfilled)
+        return false;
+    RootedObject onRejected(cx, NewHandler(cx, PipeToWriteRejectedHandler, state));
+    if (!onRejected)
+        return false;
+    if (!JS::AddPromiseReactions(cx, writePromise, onFulfilled, onRejected))
+        return false;
+
+    if (!PipeToStep(cx, state))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+PipeToReadRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    state->clearReading();
+
+    if (state->preventAbort())
+        return PipeToShutdownWithError(cx, state, args.get(0));
+
+    return PipeToShutdown(cx, state, args.get(0), true, PipeToState::Action_AbortDest);
+}
+
+static bool
+PipeToClosedRejectedHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    if (!PipeToStep(cx, state))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+[[nodiscard]] static bool
+PipeToStep(JSContext* cx, Handle<PipeToState*> state)
+{
+    if (state->shuttingDown())
+        return true;
+
+    Rooted<ReadableStream*> source(cx, state->source());
+    Rooted<WritableStream*> dest(cx, state->dest());
+
+    // Errors propagate forward.
+    if (source->errored()) {
+        RootedValue storedError(cx, source->getFixedSlot(StreamSlot_StoredError));
+        if (state->preventAbort())
+            return PipeToShutdownWithError(cx, state, storedError);
+        return PipeToShutdown(cx, state, storedError, true, PipeToState::Action_AbortDest);
+    }
+
+    // Errors propagate backward.
+    if (dest->errored()) {
+        RootedValue storedError(cx, dest->getFixedSlot(WritableStreamSlot_StoredError));
+        if (state->preventCancel())
+            return PipeToShutdownWithError(cx, state, storedError);
+        return PipeToShutdown(cx, state, storedError, true, PipeToState::Action_CancelSource);
+    }
+
+    // Closing propagates forward.
+    if (source->closed()) {
+        if (state->preventClose())
+            return PipeToShutdown(cx, state);
+        RootedValue error(cx, UndefinedValue());
+        return PipeToShutdown(cx, state, error, false, PipeToState::Action_CloseDest);
+    }
+
+    // A closing/closed destination cancels the source.
+    if (WritableStreamCloseQueuedOrInFlight(dest) || dest->closed()) {
+        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
+                                  JSMSG_WRITABLESTREAM_CLOSING_OR_CLOSED, "pipeTo");
+        RootedValue error(cx);
+        if (!GetAndClearException(cx, &error))
+            return false;
+        if (state->preventCancel())
+            return PipeToShutdownWithError(cx, state, error);
+        return PipeToShutdown(cx, state, error, true, PipeToState::Action_CancelSource);
+    }
+
+    if (state->reading())
+        return true;
+
+    Rooted<WritableStreamDefaultWriter*> writer(cx, state->writer());
+    bool hasSize;
+    double desiredSize;
+    if (!PipeToGetWriterDesiredSize(cx, writer, &hasSize, &desiredSize))
+        return false;
+    if (!hasSize || desiredSize <= 0) {
+        RootedValue readyVal(cx, writer->getFixedSlot(WritableWriterSlot_ReadyPromise));
+        RootedObject readyPromise(cx, &readyVal.toObject());
+        RootedObject onFulfilled(cx, NewHandler(cx, PipeToReadyFulfilledHandler, state));
+        if (!onFulfilled)
+            return false;
+        RootedObject onRejected(cx, NewHandler(cx, PipeToReadyRejectedHandler, state));
+        if (!onRejected)
+            return false;
+        return JS::AddPromiseReactions(cx, readyPromise, onFulfilled, onRejected);
+    }
+
+    state->setReading();
+    Rooted<ReadableStreamDefaultReader*> reader(cx, state->reader());
+    RootedObject readPromise(cx, ReadableStreamDefaultReader::read(cx, reader));
+    if (!readPromise)
+        return false;
+
+    RootedObject onFulfilled(cx, NewHandler(cx, PipeToReadFulfilledHandler, state));
+    if (!onFulfilled)
+        return false;
+    RootedObject onRejected(cx, NewHandler(cx, PipeToReadRejectedHandler, state));
+    if (!onRejected)
+        return false;
+
+    return JS::AddPromiseReactions(cx, readPromise, onFulfilled, onRejected);
+}
+
+[[nodiscard]] static bool
+PipeToAbort(JSContext* cx, Handle<PipeToState*> state)
+{
+    RootedValue signal(cx, state->signal());
+    RootedValue error(cx, UndefinedValue());
+    if (signal.isObject()) {
+        if (!GetProperty(cx, signal, cx->names().reason, &error))
+            return false;
+    }
+
+    JS::AutoObjectVector promises(cx);
+
+    if (!state->preventAbort() && state->dest()->writable()) {
+        Rooted<WritableStream*> dest(cx, state->dest());
+        RootedObject abortPromise(cx, WritableStreamAbort(cx, dest, error));
+        if (!abortPromise || !promises.append(abortPromise))
+            return false;
+    }
+
+    if (!state->preventCancel() && state->source()->readable()) {
+        Rooted<ReadableStream*> source(cx, state->source());
+        RootedObject cancelPromise(cx, ReadableStream::cancel(cx, source, error));
+        if (!cancelPromise || !promises.append(cancelPromise))
+            return false;
+    }
+
+    RootedObject actionPromise(cx);
+    if (promises.length() == 0) {
+        actionPromise = PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
+    } else {
+        actionPromise = js::GetWaitForAllPromise(cx, promises);
+    }
+    if (!actionPromise)
+        return false;
+
+    if (state->shuttingDown())
+        return true;
+    state->setShuttingDown();
+    return PipeToWaitForAction(cx, state, actionPromise, error, true);
+}
+
+static bool
+PipeToAbortHandler(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    Rooted<PipeToState*> state(cx, TargetFromHandler<PipeToState>(args.callee()));
+    if (!PipeToAbort(cx, state))
+        return false;
+    args.rval().setUndefined();
+    return true;
+}
+
+[[nodiscard]] static bool
+PipeToFollowSignal(JSContext* cx, Handle<PipeToState*> state, HandleValue signal)
+{
+    if (!signal.isObject())
+        return true;
+
+    RootedValue abortedVal(cx);
+    if (!GetProperty(cx, signal, cx->names().aborted, &abortedVal))
+        return false;
+
+    RootedObject abortAlgorithm(cx, NewHandler(cx, PipeToAbortHandler, state));
+    if (!abortAlgorithm)
+        return false;
+    state->setAbortAlgorithm(abortAlgorithm);
+
+    if (ToBoolean(abortedVal))
+        return PipeToAbort(cx, state);
+
+    RootedValue addListener(cx);
+    if (!GetProperty(cx, signal, cx->names().addEventListener, &addListener))
+        return false;
+    if (addListener.isUndefined())
+        return true;
+
+    RootedValue eventType(cx, StringValue(cx->names().abort));
+    RootedValue handlerVal(cx, ObjectValue(*abortAlgorithm));
+    RootedValue rval(cx);
+    return Call(cx, addListener, signal, eventType, handlerVal, &rval);
+}
+
+[[nodiscard]] static JSObject*
+ReadableStreamPipeTo(JSContext* cx, Handle<ReadableStream*> source, Handle<WritableStream*> dest,
+                     bool preventClose, bool preventAbort, bool preventCancel,
+                     HandleValue signal)
+{
+    RootedObject reader(cx, CreateReadableStreamDefaultReader(cx, source));
+    if (!reader)
+        return nullptr;
+
+    RootedObject writer(cx, CreateWritableStreamDefaultWriter(cx, dest));
+    if (!writer)
+        return nullptr;
+
+    SetStreamState(source, StreamState(source) | ReadableStream::Disturbed);
+
+    Rooted<PipeToState*> state(cx);
+    state = PipeToState::create(cx, source, dest, reader, writer, preventClose, preventAbort,
+                                preventCancel, signal);
+    if (!state)
+        return nullptr;
+
+    RootedObject onClosedRejected(cx, NewHandler(cx, PipeToClosedRejectedHandler, state));
+    if (!onClosedRejected)
+        return nullptr;
+
+    RootedValue readerClosedVal(cx, state->reader()->getFixedSlot(ReaderSlot_ClosedPromise));
+    RootedObject readerClosed(cx, &readerClosedVal.toObject());
+    if (!JS::AddPromiseReactions(cx, readerClosed, nullptr, onClosedRejected))
+        return nullptr;
+
+    RootedObject onWriterClosedRejected(cx, NewHandler(cx, PipeToClosedRejectedHandler, state));
+    if (!onWriterClosedRejected)
+        return nullptr;
+
+    RootedValue writerClosedVal(cx, state->writer()->getFixedSlot(WritableWriterSlot_ClosedPromise));
+    RootedObject writerClosed(cx, &writerClosedVal.toObject());
+    if (!JS::AddPromiseReactions(cx, writerClosed, nullptr, onWriterClosedRejected))
+        return nullptr;
+
+    if (!PipeToFollowSignal(cx, state, signal))
+        return nullptr;
+
+    if (!state->shuttingDown() && !PipeToStep(cx, state))
+        return nullptr;
+
+    return state->promise();
+}
 
 // Streams spec, 3.3.1. AcquireReadableStreamBYOBReader ( stream )
 // Always inlined.
@@ -1811,8 +4632,7 @@ static const JSPropertySpec ReadableStreamDefaultReader_properties[] = {
     JS_PS_END
 };
 
-CLASS_SPEC(ReadableStreamDefaultReader, 1, ReaderSlotCount, ClassSpec::DontDefineConstructor, 0,
-           JS_NULL_CLASS_OPS);
+CLASS_SPEC(ReadableStreamDefaultReader, 1, ReaderSlotCount, 0, 0, JS_NULL_CLASS_OPS);
 
 
 // Streams spec, 3.6.3 new ReadableStreamBYOBReader ( stream )
@@ -2026,7 +4846,7 @@ static const JSFunctionSpec ReadableStreamBYOBReader_methods[] = {
     JS_FS_END
 };
 
-CLASS_SPEC(ReadableStreamBYOBReader, 1, 3, ClassSpec::DontDefineConstructor, 0, JS_NULL_CLASS_OPS);
+CLASS_SPEC(ReadableStreamBYOBReader, 1, 3, 0, 0, JS_NULL_CLASS_OPS);
 
 [[nodiscard]] inline static bool
 ReadableStreamControllerCallPullIfNeeded(JSContext* cx, HandleNativeObject controller);
@@ -2341,43 +5161,12 @@ CreateReadableStreamDefaultController(JSContext* cx, Handle<ReadableStream*> str
     return controller;
 }
 
-// Streams spec, 3.8.3.
-// new ReadableStreamDefaultController( stream, underlyingSource, size,
-//                                      highWaterMark )
 bool
 ReadableStreamDefaultController::constructor(JSContext* cx, unsigned argc, Value* vp)
 {
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    if (!ThrowIfNotConstructing(cx, args, "ReadableStreamDefaultController"))
-        return false;
-
-    // Step 1: If ! IsReadableStream(stream) is false, throw a TypeError exception.
-    HandleValue streamVal = args.get(0);
-    if (!Is<ReadableStream>(streamVal)) {
-        ReportArgTypeError(cx, "ReadableStreamDefaultController", "ReadableStream",
-                           args.get(0));
-        return false;
-    }
-
-    Rooted<ReadableStream*> stream(cx, &streamVal.toObject().as<ReadableStream>());
-
-    // Step 2: If stream.[[readableStreamController]] is not undefined, throw a
-    //         TypeError exception.
-    if (HasController(stream)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                                  JSMSG_READABLESTREAM_CONTROLLER_SET);
-        return false;
-    }
-
-    // Steps 3-11.
-    RootedObject controller(cx, CreateReadableStreamDefaultController(cx, stream, args.get(1),
-                                                                      args.get(2), args.get(3)));
-    if (!controller)
-        return false;
-
-    args.rval().setObject(*controller);
-    return true;
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_CONSTRUCTOR,
+                              "ReadableStreamDefaultController");
+    return false;
 }
 
 [[nodiscard]] static double
@@ -2571,8 +5360,7 @@ static const JSFunctionSpec ReadableStreamDefaultController_methods[] = {
     JS_FS_END
 };
 
-CLASS_SPEC(ReadableStreamDefaultController, 4, 7, ClassSpec::DontDefineConstructor, 0,
-           JS_NULL_CLASS_OPS);
+CLASS_SPEC(ReadableStreamDefaultController, 0, 7, 0, 0, JS_NULL_CLASS_OPS);
 
 /**
  * Unified implementation of ReadableStream controllers' [[CancelSteps]] internal
@@ -3110,42 +5898,12 @@ ReadableByteStreamController::hasExternalSource() {
     return ControllerFlags(this) & ControllerFlag_ExternalSource;
 }
 
-// Streams spec, 3.10.3.
-// new ReadableByteStreamController ( stream, underlyingByteSource,
-//                                    highWaterMark )
 bool
 ReadableByteStreamController::constructor(JSContext* cx, unsigned argc, Value* vp)
 {
-    CallArgs args = CallArgsFromVp(argc, vp);
-
-    if (!ThrowIfNotConstructing(cx, args, "ReadableByteStreamController"))
-        return false;
-
-    // Step 1: If ! IsReadableStream(stream) is false, throw a TypeError exception.
-    HandleValue streamVal = args.get(0);
-    if (!Is<ReadableStream>(streamVal)) {
-        ReportArgTypeError(cx, "ReadableStreamDefaultController", "ReadableStream",
-                           args.get(0));
-        return false;
-    }
-
-    Rooted<ReadableStream*> stream(cx, &streamVal.toObject().as<ReadableStream>());
-
-    // Step 2: If stream.[[readableStreamController]] is not undefined, throw a
-    //         TypeError exception.
-    if (HasController(stream)) {
-        JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                                  JSMSG_READABLESTREAM_CONTROLLER_SET);
-        return false;
-    }
-
-    RootedObject controller(cx, CreateReadableByteStreamController(cx, stream, args.get(1),
-                                                                   args.get(2)));
-    if (!controller)
-        return false;
-
-    args.rval().setObject(*controller);
-    return true;
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_CONSTRUCTOR,
+                              "ReadableByteStreamController");
+    return false;
 }
 
 // Version of the ReadableByteStreamConstructor that's specialized for
@@ -3451,7 +6209,7 @@ static const ClassOps ReadableByteStreamControllerClassOps = {
     nullptr,        /* trace   */
 };
 
-CLASS_SPEC(ReadableByteStreamController, 3, 9, ClassSpec::DontDefineConstructor,
+CLASS_SPEC(ReadableByteStreamController, 0, 9, 0,
            JSCLASS_BACKGROUND_FINALIZE, &ReadableByteStreamControllerClassOps);
 
 // Streams spec, 3.10.5.1. [[PullSteps]] ()
@@ -3634,42 +6392,12 @@ CreateReadableStreamBYOBRequest(JSContext* cx, Handle<ReadableByteStreamControll
   return request;
 }
 
-// Streams spec, 3.11.3. new ReadableStreamBYOBRequest ( controller, view )
 bool
 ReadableStreamBYOBRequest::constructor(JSContext* cx, unsigned argc, Value* vp)
 {
-    CallArgs args = CallArgsFromVp(argc, vp);
-    HandleValue controllerVal = args.get(0);
-    HandleValue viewVal = args.get(1);
-
-    if (!ThrowIfNotConstructing(cx, args, "ReadableStreamBYOBRequest"))
-        return false;
-
-    // TODO: open PR against spec to add these checks.
-    // They're expected to have happened in code using requests.
-    if (!Is<ReadableByteStreamController>(controllerVal)) {
-        ReportArgTypeError(cx, "ReadableStreamBYOBRequest",
-                           "ReadableByteStreamController", args.get(0));
-        return false;
-    }
-
-    Rooted<ReadableByteStreamController*> controller(cx);
-    controller = &controllerVal.toObject().as<ReadableByteStreamController>();
-
-    if (!viewVal.isObject() || !JS_IsArrayBufferViewObject(&viewVal.toObject())) {
-        ReportArgTypeError(cx, "ReadableStreamBYOBRequest", "ArrayBuffer view",
-                           args.get(1));
-        return false;
-    }
-
-    RootedArrayBufferObject view(cx, &viewVal.toObject().as<ArrayBufferObject>());
-
-    RootedObject request(cx, CreateReadableStreamBYOBRequest(cx, controller, view));
-    if (!request)
-        return false;
-
-    args.rval().setObject(*request);
-    return true;
+    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr, JSMSG_NOT_CONSTRUCTOR,
+                              "ReadableStreamBYOBRequest");
+    return false;
 }
 
 // Streams spec, 3.11.4.1 get view
@@ -3804,8 +6532,7 @@ static const JSFunctionSpec ReadableStreamBYOBRequest_methods[] = {
     JS_FS_END
 };
 
-CLASS_SPEC(ReadableStreamBYOBRequest, 3, 2, ClassSpec::DontDefineConstructor, 0,
-           JS_NULL_CLASS_OPS);
+CLASS_SPEC(ReadableStreamBYOBRequest, 0, 2, 0, 0, JS_NULL_CLASS_OPS);
 
 // Streams spec, 3.12.1. IsReadableStreamBYOBRequest ( x )
 // Implemented via is<ReadableStreamBYOBRequest>()
@@ -4994,7 +7721,7 @@ DequeueValue(JSContext* cx, HandleNativeObject container, MutableHandleValue chu
 {
     // Step 1: Assert: container has [[queue]] and [[queueTotalSize]] internal
     //         slots.
-    MOZ_ASSERT(IsReadableStreamController(container));
+    MOZ_ASSERT(IsQueueContainer(container));
 
     // Step 2: Assert: queue is not empty.
     RootedValue val(cx, container->getFixedSlot(QueueContainerSlot_Queue));
@@ -5031,7 +7758,7 @@ EnqueueValueWithSize(JSContext* cx, HandleNativeObject container, HandleValue va
 {
     // Step 1: Assert: container has [[queue]] and [[queueTotalSize]] internal
     //         slots.
-    MOZ_ASSERT(IsReadableStreamController(container));
+    MOZ_ASSERT(IsQueueContainer(container));
 
     // Step 2: Let size be ? ToNumber(size).
     double size;
@@ -5095,7 +7822,7 @@ ResetQueue(JSContext* cx, HandleNativeObject container)
 {
     // Step 1: Assert: container has [[queue]] and [[queueTotalSize]] internal
     //         slots.
-    MOZ_ASSERT(IsReadableStreamController(container));
+    MOZ_ASSERT(IsQueueContainer(container));
 
     // Step 2: Set container.[[queue]] to a new empty List.
     if (!SetNewList(cx, container, QueueContainerSlot_Queue))
@@ -5137,20 +7864,20 @@ InvokeOrNoop(JSContext* cx, HandleValue O, HandlePropertyName P, HandleValue arg
 [[nodiscard]] static JSObject*
 PromiseInvokeOrNoop(JSContext* cx, HandleValue O, HandlePropertyName P, HandleValue arg)
 {
-    // Step 1: Assert: O is not undefined.
-    MOZ_ASSERT(!O.isUndefined());
+    if (O.isUndefined() || O.isNull())
+        return PromiseObject::unforgeableResolve(cx, UndefinedHandleValue);
 
-    // Step 2: Assert: ! IsPropertyKey(P) is true (implicit).
-    // Step 3: Assert: args is a List (omitted).
+    // Step 1: Assert: ! IsPropertyKey(P) is true (implicit).
+    // Step 2: Assert: args is a List (omitted).
 
-    // Step 4: Let returnValue be InvokeOrNoop(O, P, args).
-    // Step 5: If returnValue is an abrupt completion, return a promise
+    // Step 3: Let returnValue be InvokeOrNoop(O, P, args).
+    // Step 4: If returnValue is an abrupt completion, return a promise
     //         rejected with returnValue.[[Value]].
     RootedValue returnValue(cx);
     if (!InvokeOrNoop(cx, O, P, arg, &returnValue))
         return PromiseRejectedWithPendingError(cx);
 
-    // Step 6: Otherwise, return a promise resolved with returnValue.[[Value]].
+    // Step 5: Otherwise, return a promise resolved with returnValue.[[Value]].
     return PromiseObject::unforgeableResolve(cx, returnValue);
 }
 

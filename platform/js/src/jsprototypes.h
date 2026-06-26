@@ -115,9 +115,9 @@ IF_SAB(real,imaginary)(Atomics, InitAtomicsClass, OCLASP(Atomics)) \
     real(ReadableStreamDefaultController,     InitViaClassSpec, &js::ReadableStreamDefaultController::class_) \
     real(ReadableByteStreamController,        InitViaClassSpec, &js::ReadableByteStreamController::class_) \
     real(ReadableStreamBYOBRequest,           InitViaClassSpec, &js::ReadableStreamBYOBRequest::class_) \
-    imaginary(WritableStream,   dummy,                  dummy) \
-    imaginary(WritableStreamDefaultWriter,    dummy,    dummy) \
-    imaginary(WritableStreamDefaultController,dummy,    dummy) \
+    real(WritableStream,        InitViaClassSpec,       &js::WritableStream::class_) \
+    real(WritableStreamDefaultWriter,          InitViaClassSpec, &js::WritableStreamDefaultWriter::class_) \
+    real(WritableStreamDefaultController,      InitViaClassSpec, &js::WritableStreamDefaultController::class_) \
     real(ByteLengthQueuingStrategy,           InitViaClassSpec, &js::ByteLengthQueuingStrategy::class_) \
     real(CountQueuingStrategy,  InitViaClassSpec,       &js::CountQueuingStrategy::class_) \
     real(WeakRef,               InitWeakRefClass,       OCLASP(WeakRef)) \

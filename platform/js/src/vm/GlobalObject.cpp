@@ -107,6 +107,9 @@ GlobalObject::skipDeselectedConstructor(JSContext* cx, JSProtoKey key)
       case JSProto_ReadableStreamDefaultController:
       case JSProto_ReadableByteStreamController:
       case JSProto_ReadableStreamBYOBRequest:
+      case JSProto_WritableStream:
+      case JSProto_WritableStreamDefaultWriter:
+      case JSProto_WritableStreamDefaultController:
       case JSProto_ByteLengthQueuingStrategy:
       case JSProto_CountQueuingStrategy:
         return !cx->options().streams();
