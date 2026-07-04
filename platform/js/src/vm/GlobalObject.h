@@ -103,7 +103,6 @@ class GlobalObject : public NativeObject
         ASYNC_GENERATOR,
         ASYNC_GENERATOR_FUNCTION,
         ASYNC_GENERATOR_PROTO,
-        READABLE_STREAM_ASYNC_ITERATOR_PROTO,
         MAP_ITERATOR_PROTO,
         SET_ITERATOR_PROTO,
         COLLATOR_PROTO,
@@ -680,10 +679,6 @@ class GlobalObject : public NativeObject
         return MaybeNativeObject(getOrCreateObject(cx, global, ASYNC_GENERATOR_PROTO,
                                                    initAsyncGenerators));
     }
-
-    static NativeObject*
-    getOrCreateReadableStreamAsyncIteratorPrototype(JSContext* cx,
-                                                    Handle<GlobalObject*> global);
 
     static JSObject*
     getOrCreateMapIteratorPrototype(JSContext* cx, Handle<GlobalObject*> global) {
