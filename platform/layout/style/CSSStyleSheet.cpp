@@ -1781,6 +1781,7 @@ CSSStyleSheet::DidDirty()
   MOZ_ASSERT(!mInner->mComplete || mDirty,
              "caller must have called WillDirty()");
   ClearRuleCascades();
+  NotifyAdopterRuleChanged();
 }
 
 void
@@ -1870,12 +1871,19 @@ CSSStyleSheet::InsertRuleInternal(const nsAString& aRule,
   RefPtr<css::Rule> rule;
   aRv = css.ParseRule(aRule, mInner->mSheetURI, mInner->mBaseURI,
                       mInner->mPrincipal, getter_AddRefs(rule));
-  if (NS_WARN_IF(aRv.Failed())) {
+  // A syntax error from web content is an expected insertRule() outcome. The
+  // binding reports it to script; do not flood debug stderr as well.
+  if (aRv.Failed()) {
     return 0;
   }
 
   // Hierarchy checking.
   int32_t newType = rule->GetType();
+
+  if (IsConstructed() && newType == css::Rule::IMPORT_RULE) {
+    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+    return 0;
+  }
 
   // check that we're not inserting before a charset rule
   css::Rule* nextRule = mInner->mOrderedRules.SafeObjectAt(aIndex);
