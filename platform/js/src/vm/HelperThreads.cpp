@@ -929,7 +929,8 @@ GlobalHelperThreadState::maxWasmCompilationThreads() const
 {
     if (IsHelperThreadSimulatingOOM(js::oom::THREAD_TYPE_ASMJS))
         return 1;
-    return cpuCount;
+    //return cpuCount;
+    return 2;
 }
 
 size_t
@@ -938,7 +939,8 @@ GlobalHelperThreadState::maxParseThreads() const
     if (IsHelperThreadSimulatingOOM(js::oom::THREAD_TYPE_PARSE))
         return 1;
     // Use the number of logical + 1 processors in a system.
-    return cpuCount;
+    //return cpuCount;
+    return 2;
 }
 
 size_t
