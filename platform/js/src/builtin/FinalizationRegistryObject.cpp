@@ -104,14 +104,17 @@ struct WeakCell {
             if (IsInsideNursery(target)) {
                 TraceManuallyBarrieredEdge(trc, object.unsafeGet(), name);
             } else {
-                if (trc->isMarkingTracer() && !target->asTenured().zone()->isCollecting())
+                // A gray marker may only mark into a zone that is in the gray
+                // marking state; a zone still in Mark (black) is in a different
+                // zone group and gets its own pass.
+                if (trc->isMarkingTracer() && !target->asTenured().zone()->isGCMarkingGray())
                     return;
                 TraceWeakEdge(trc, &object, name);
             }
         } else if (kind == WeakCellKind::Symbol) {
             JS::Symbol* target = symbol.unbarrieredGet();
             if (target) {
-                if (trc->isMarkingTracer() && !target->asTenured().zone()->isCollecting())
+                if (trc->isMarkingTracer() && !target->asTenured().zone()->isGCMarkingGray())
                     return;
                 TraceWeakEdge(trc, &symbol, name);
             }
@@ -126,12 +129,12 @@ struct WeakCell {
 
             if (IsInsideNursery(target)) {
                 TraceManuallyBarrieredEdge(trc, object.unsafeGet(), name);
-            } else if (target->asTenured().zone()->isCollecting()) {
+            } else if (target->asTenured().zone()->isGCMarkingGray()) {
                 TraceWeakEdge(trc, &object, name);
             }
         } else if (kind == WeakCellKind::Symbol) {
             JS::Symbol* target = symbol.unbarrieredGet();
-            if (target && target->asTenured().zone()->isCollecting())
+            if (target && target->asTenured().zone()->isGCMarkingGray())
                 TraceWeakEdge(trc, &symbol, name);
         }
     }
@@ -401,6 +404,8 @@ FinalizationRegistryObject::create(JSContext* cx, HandleObject cleanupCallback,
     if (!obj)
         return nullptr;
 
+    MOZ_ASSERT(!IsInsideNursery(obj.get()));
+
     Data* data = cx->new_<Data>(cleanupCallback);
     if (!data)
         return nullptr;
@@ -510,6 +515,17 @@ FinalizationRegistryObject::cleanupJob(JSContext* cx, unsigned argc, Value* vp)
 /* static */ void
 FinalizationRegistryObject::trace(JSTracer* trc, JSObject* obj)
 {
+    // Registered by raw pointer in our own zone's finalizationRegistries, which
+    // nothing relocates. traceFinalizationRegistryWeakRefs() and
+    // Zone::~Zone both dereference these entries, so repair ours if we moved.
+    if (trc->runtime()->gc.isHeapCompacting()) {
+        for (auto& registry : obj->zone()->finalizationRegistries) {
+            JSObject** p = registry.unsafeGet();
+            if (*p && js::gc::IsForwarded(*p) && js::gc::Forwarded(*p) == obj)
+                *p = obj;
+        }
+    }
+
     if (Data* data = GetData(obj))
         data->trace(trc);
 }
