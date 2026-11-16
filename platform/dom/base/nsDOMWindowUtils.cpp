@@ -2384,18 +2384,18 @@ nsDOMWindowUtils::GetSupportsHardwareVP9Decoding(JS::MutableHandle<JS::Value> aP
   if (!MediaPrefs::PDMWMFVP9DecoderEnabled()) {
     promise->MaybeResolve(NS_LITERAL_STRING("No; media.wmf.vp9.enabled is false"));
   } else if (!gfx::gfxVars::CanUseHardwareVideoDecoding()) {
-    promise->MaybeResolve(NS_LITERAL_STRING("No; hardware video decoding disabled"));
+    promise->MaybeResolve(NS_LITERAL_STRING("No; Hardware video decoding disabled"));
   } else if (MediaPrefs::PDMWMFVP9MFTEnabled() &&
              WMFDecoderModule::HasVP9MFT()) {
-    promise->MaybeResolve(NS_LITERAL_STRING("Yes, using MFT"));
+    promise->MaybeResolve(NS_LITERAL_STRING("Yes; Using MFT"));
   } else if (layerManager &&
              WMFDecoderModule::HasVP9DXVA2(layerManager->AsShadowForwarder())) {
-    promise->MaybeResolve(NS_LITERAL_STRING("Yes; using DXVA2"));
+    promise->MaybeResolve(NS_LITERAL_STRING("Yes; Using DXVA2"));
   } else {
-    promise->MaybeResolve(NS_LITERAL_STRING("No; no VP9 hardware decoder available"));
+    promise->MaybeResolve(NS_LITERAL_STRING("No; No VP9 hardware decoder available"));
   }
 #else
-  promise->MaybeResolve(NS_LITERAL_STRING("No; not supported on this platform"));
+  promise->MaybeResolve(NS_LITERAL_STRING("No; Not supported on this platform"));
 #endif
   aPromise.setObject(*promise->PromiseObj());
   return NS_OK;
