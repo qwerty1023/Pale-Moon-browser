@@ -737,6 +737,7 @@ class ICStub
           case GetProp_CallDOMProxyNative:
           case GetProp_CallDOMProxyWithGenerationNative:
           case GetProp_DOMProxyShadowed:
+          case GetElem_Generic:
           case GetProp_Generic:
           case SetProp_CallScripted:
           case SetProp_CallNative:

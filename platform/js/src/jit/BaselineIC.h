@@ -392,6 +392,34 @@ class ICGetElem_Fallback : public ICMonitoredFallbackStub
     };
 };
 
+class ICGetElem_Generic : public ICMonitoredStub
+{
+    friend class ICStubSpace;
+
+  protected:
+    explicit ICGetElem_Generic(JitCode* stubCode, ICStub* firstMonitorStub)
+      : ICMonitoredStub(ICStub::GetElem_Generic, stubCode, firstMonitorStub) {}
+
+  public:
+    static ICGetElem_Generic* Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,
+                                    ICGetElem_Generic& other);
+
+    class Compiler : public ICStubCompiler {
+      protected:
+        [[nodiscard]] bool generateStubCode(MacroAssembler& masm);
+        ICStub* firstMonitorStub_;
+      public:
+        explicit Compiler(JSContext* cx, ICStub* firstMonitorStub)
+          : ICStubCompiler(cx, ICStub::GetElem_Generic, Engine::Baseline),
+            firstMonitorStub_(firstMonitorStub)
+        {}
+
+        ICStub* getStub(ICStubSpace* space) {
+            return newStub<ICGetElem_Generic>(space, getStubCode(), firstMonitorStub_);
+        }
+    };
+};
+
 class ICGetElemNativeStub : public ICMonitoredStub
 {
   public:

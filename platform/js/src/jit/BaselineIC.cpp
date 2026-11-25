@@ -16,6 +16,7 @@
 
 #include "builtin/Eval.h"
 #include "gc/Policy.h"
+#include "jit/BaselineCacheIR.h"
 #include "jit/BaselineDebugModeOSR.h"
 #include "jit/BaselineJIT.h"
 #include "jit/InlinableNatives.h"
@@ -1591,12 +1592,46 @@ DoGetElemFallback(JSContext* cx, BaselineFrame* frame, ICGetElem_Fallback* stub_
         return false;
     }
 
+    if (stub->numOptimizedStubs() >= ICGetElem_Fallback::MAX_OPTIMIZED_STUBS) {
+        // Add a terminal generic stub so misses in a saturated chain avoid
+        // fallback bookkeeping. Retain existing stubs for accesses that still
+        // hit their fast paths.
+        ICGetElem_Generic::Compiler compiler(cx,
+            stub->fallbackMonitorStub()->firstMonitorStub());
+        ICStub* newStub = compiler.getStub(compiler.getStubSpace(frame->script()));
+        if (!newStub)
+            return false;
+        stub->addNewStub(newStub);
+        return true;
+    }
+
     if (attached)
         return true;
 
     // Try to attach an optimized stub.
     if (!TryAttachGetElemStub(cx, frame->script(), pc, stub, lhs, rhs, res, &attached))
         return false;
+
+    // Existing GetElem stubs handle successful lookups. Reuse CacheIR's
+    // prototype-chain guards for missing named properties as well.
+    if (!attached && res.isUndefined() && !JitOptions.disableCacheIR && lhs.isObject() &&
+        lhs.toObject().isNative() && rhs.isString() && rhs.toString()->isAtom())
+    {
+        uint32_t index;
+        JSAtom* atom = &rhs.toString()->asAtom();
+        if (!atom->isIndex(&index)) {
+            RootedPropertyName name(cx, atom->asPropertyName());
+            mozilla::Maybe<CacheIRWriter> writer;
+            GetPropIRGenerator gen(cx, pc, lhs, name, res);
+            if (!gen.tryAttachMissingGetElemStub(writer))
+                return false;
+            if (gen.emitted()) {
+                ICStub* newStub = AttachBaselineCacheIRStub(cx, writer.ref(), CacheKind::GetElem, stub);
+                if (newStub)
+                    attached = true;
+            }
+        }
+    }
 
     if (!attached && !isTemporarilyUnoptimizable)
         stub->noteUnoptimizableAccess();
@@ -1630,6 +1665,63 @@ ICGetElem_Fallback::Compiler::generateStubCode(MacroAssembler& masm)
     pushStubPayload(masm, R0.scratchReg());
 
     return tailCallVM(DoGetElemFallbackInfo, masm);
+}
+
+//
+// GetElem_Generic
+//
+
+/* static */ ICGetElem_Generic*
+ICGetElem_Generic::Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,
+                         ICGetElem_Generic& other)
+{
+    return New<ICGetElem_Generic>(cx, space, other.jitCode(), firstMonitorStub);
+}
+
+static bool
+DoGetElemGeneric(JSContext* cx, BaselineFrame* frame, ICGetElem_Generic* stub,
+                 MutableHandleValue obj, HandleValue key, MutableHandleValue res)
+{
+    jsbytecode* pc = stub->getChainFallback()->icEntry()->pc(frame->script());
+    JSOp op = JSOp(*pc);
+    MOZ_ASSERT(op == JSOP_GETELEM || op == JSOP_CALLELEM);
+
+    if (obj.isMagic(JS_OPTIMIZED_ARGUMENTS)) {
+        bool done = false;
+        if (!GetElemOptimizedArguments(cx, frame, obj, key, res, &done))
+            return false;
+        if (done)
+            return true;
+    }
+    return GetElementOperation(cx, op, obj, key, res);
+}
+
+typedef bool (*DoGetElemGenericFn)(JSContext*, BaselineFrame*, ICGetElem_Generic*,
+                                  MutableHandleValue, HandleValue, MutableHandleValue);
+static const VMFunction DoGetElemGenericInfo =
+    FunctionInfo<DoGetElemGenericFn>(DoGetElemGeneric, "DoGetElemGeneric");
+
+bool
+ICGetElem_Generic::Compiler::generateStubCode(MacroAssembler& masm)
+{
+    AllocatableGeneralRegisterSet regs(availableGeneralRegs(2));
+    Register scratch = regs.takeAnyExcluding(ICTailCallReg);
+
+    // Keep both bytecode operands available to the expression decompiler.
+    EmitStowICValues(masm, 2);
+    enterStubFrame(masm, scratch);
+
+    masm.Push(R1);
+    masm.Push(R0);
+    masm.Push(ICStubReg);
+    PushStubPayload(masm, R0.scratchReg());
+    if (!callVM(DoGetElemGenericInfo, masm))
+        return false;
+
+    leaveStubFrame(masm);
+    EmitUnstowICValues(masm, 2, /* discard = */ true);
+    EmitEnterTypeMonitorIC(masm);
+    return true;
 }
 
 //
@@ -7948,11 +8040,6 @@ DoTypeOfFallback(JSContext* cx, BaselineFrame* frame, ICTypeOf_Fallback* stub, H
     res.setString(string);
 
     MOZ_ASSERT(type != JSTYPE_NULL);
-#ifdef JS_CODEGEN_ARM64
-    // ARM64 has no BigInt type guard; keep using the VM fallback.
-    if (type == JSTYPE_BIGINT)
-        return true;
-#endif
     if (type != JSTYPE_OBJECT && type != JSTYPE_FUNCTION) {
         // Create a new TypeOf stub.
         JitSpew(JitSpew_BaselineIC, "  Generating TypeOf stub for JSType (%d)", (int) type);
