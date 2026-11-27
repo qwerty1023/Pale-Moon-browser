@@ -1592,19 +1592,6 @@ DoGetElemFallback(JSContext* cx, BaselineFrame* frame, ICGetElem_Fallback* stub_
         return false;
     }
 
-    if (stub->numOptimizedStubs() >= ICGetElem_Fallback::MAX_OPTIMIZED_STUBS) {
-        // Add a terminal generic stub so misses in a saturated chain avoid
-        // fallback bookkeeping. Retain existing stubs for accesses that still
-        // hit their fast paths.
-        ICGetElem_Generic::Compiler compiler(cx,
-            stub->fallbackMonitorStub()->firstMonitorStub());
-        ICStub* newStub = compiler.getStub(compiler.getStubSpace(frame->script()));
-        if (!newStub)
-            return false;
-        stub->addNewStub(newStub);
-        return true;
-    }
-
     if (attached)
         return true;
 
@@ -1665,63 +1652,6 @@ ICGetElem_Fallback::Compiler::generateStubCode(MacroAssembler& masm)
     pushStubPayload(masm, R0.scratchReg());
 
     return tailCallVM(DoGetElemFallbackInfo, masm);
-}
-
-//
-// GetElem_Generic
-//
-
-/* static */ ICGetElem_Generic*
-ICGetElem_Generic::Clone(JSContext* cx, ICStubSpace* space, ICStub* firstMonitorStub,
-                         ICGetElem_Generic& other)
-{
-    return New<ICGetElem_Generic>(cx, space, other.jitCode(), firstMonitorStub);
-}
-
-static bool
-DoGetElemGeneric(JSContext* cx, BaselineFrame* frame, ICGetElem_Generic* stub,
-                 MutableHandleValue obj, HandleValue key, MutableHandleValue res)
-{
-    jsbytecode* pc = stub->getChainFallback()->icEntry()->pc(frame->script());
-    JSOp op = JSOp(*pc);
-    MOZ_ASSERT(op == JSOP_GETELEM || op == JSOP_CALLELEM);
-
-    if (obj.isMagic(JS_OPTIMIZED_ARGUMENTS)) {
-        bool done = false;
-        if (!GetElemOptimizedArguments(cx, frame, obj, key, res, &done))
-            return false;
-        if (done)
-            return true;
-    }
-    return GetElementOperation(cx, op, obj, key, res);
-}
-
-typedef bool (*DoGetElemGenericFn)(JSContext*, BaselineFrame*, ICGetElem_Generic*,
-                                  MutableHandleValue, HandleValue, MutableHandleValue);
-static const VMFunction DoGetElemGenericInfo =
-    FunctionInfo<DoGetElemGenericFn>(DoGetElemGeneric, "DoGetElemGeneric");
-
-bool
-ICGetElem_Generic::Compiler::generateStubCode(MacroAssembler& masm)
-{
-    AllocatableGeneralRegisterSet regs(availableGeneralRegs(2));
-    Register scratch = regs.takeAnyExcluding(ICTailCallReg);
-
-    // Keep both bytecode operands available to the expression decompiler.
-    EmitStowICValues(masm, 2);
-    enterStubFrame(masm, scratch);
-
-    masm.Push(R1);
-    masm.Push(R0);
-    masm.Push(ICStubReg);
-    PushStubPayload(masm, R0.scratchReg());
-    if (!callVM(DoGetElemGenericInfo, masm))
-        return false;
-
-    leaveStubFrame(masm);
-    EmitUnstowICValues(masm, 2, /* discard = */ true);
-    EmitEnterTypeMonitorIC(masm);
-    return true;
 }
 
 //

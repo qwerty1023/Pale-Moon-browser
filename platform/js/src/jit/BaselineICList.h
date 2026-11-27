@@ -45,7 +45,6 @@ namespace jit {
     _(Call_StringSplit)                          \
     _(Call_IsSuspendedStarGenerator)             \
                                                  \
-    _(GetElem_Generic)                           \
     _(GetElem_Fallback)                          \
     _(GetElem_NativeSlotName)                    \
     _(GetElem_NativeSlotSymbol)                  \
